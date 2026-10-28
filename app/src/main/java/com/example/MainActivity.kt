@@ -124,7 +124,6 @@ fun S3xyCockpitAppShell(
 
     val activeFaultCount = remember(alerts) { alerts.count { it.isActive } }
 
-    // BackHandler for secondary tabs or edit mode
     BackHandler(enabled = uiState.currentTab != CockpitTab.COCKPIT || uiState.isEditLayoutMode) {
         if (uiState.isEditLayoutMode) {
             viewModel.toggleEditLayoutMode()
@@ -289,7 +288,6 @@ fun S3xyCockpitAppShell(
                                 sessions = sessions,
                                 onToggleRecording = viewModel::toggleSessionRecording,
                                 onSelectSession = viewModel::selectLogSessionForInspection,
-                                onReplaySession = viewModel::replayRecordedSession,
                                 onExportCsv = viewModel::exportSessionCsv,
                                 onExportJson = viewModel::exportSessionOrFullBundleJson,
                                 onDeleteSession = viewModel::deleteSingleLogSession,
@@ -309,13 +307,10 @@ fun S3xyCockpitAppShell(
                         viewModel.setShowConnectionSheet(false)
                         viewModel.connectToLiveS3xyWifi(bindFirst)
                     },
-                    onSelectBundledTrace = { trace ->
+                    onDisconnect = {
                         viewModel.setShowConnectionSheet(false)
-                        viewModel.startBundledCanReplay(trace)
-                    },
-                    onToggleReplayPause = viewModel::toggleReplayPause,
-                    onSelectReplaySpeed = viewModel::setReplaySpeed,
-                    onSeekReplay = viewModel::seekReplay
+                        viewModel.disconnectS3xySocket()
+                    }
                 )
             }
         }

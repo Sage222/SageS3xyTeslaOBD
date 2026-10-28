@@ -13,10 +13,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Update
 import com.example.model.AlertFreezeFrame
-import com.example.model.AlertSeverity
 import com.example.model.DashboardWidgetConfig
 import com.example.model.MetricPid
-import com.example.model.TeslaSubsystem
 import com.example.model.WidgetSpan
 import com.example.model.WidgetStyle
 import kotlinx.coroutines.flow.Flow
@@ -121,14 +119,11 @@ interface AlertDao {
     @Query("SELECT * FROM vehicle_alerts ORDER BY isActive DESC, timestampMs DESC")
     fun observeAllAlerts(): Flow<List<VehicleAlertEntity>>
 
-    @Query("SELECT COUNT(*) FROM vehicle_alerts")
-    suspend fun countAlerts(): Int
+    @Query("SELECT * FROM vehicle_alerts WHERE alertCode = :code AND isActive = 1 LIMIT 1")
+    suspend fun findActiveAlertByCode(code: String): VehicleAlertEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAlert(alert: VehicleAlertEntity): Long
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAllAlerts(alerts: List<VehicleAlertEntity>)
 
     @Query("UPDATE vehicle_alerts SET isActive = 0, isAcknowledged = 1 WHERE isActive = 1")
     suspend fun clearAndAcknowledgeActiveAlerts()
@@ -145,9 +140,6 @@ interface TelemetrySessionDao {
     @Query("SELECT * FROM telemetry_sessions ORDER BY startTimeMs DESC")
     fun observeAllSessions(): Flow<List<TelemetrySessionEntity>>
 
-    @Query("SELECT COUNT(*) FROM telemetry_sessions")
-    suspend fun countSessions(): Int
-
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSession(session: TelemetrySessionEntity): Long
 
@@ -156,9 +148,6 @@ interface TelemetrySessionDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSample(sample: TelemetrySampleEntity)
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertSamples(samples: List<TelemetrySampleEntity>)
 
     @Query("SELECT * FROM telemetry_samples WHERE sessionId = :sessionId ORDER BY elapsedMs ASC")
     suspend fun getSamplesForSession(sessionId: Long): List<TelemetrySampleEntity>
@@ -183,7 +172,7 @@ interface TelemetrySessionDao {
         TelemetrySessionEntity::class,
         TelemetrySampleEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -277,20 +266,20 @@ object CockpitJsonSerializer {
             AlertFreezeFrame(
                 speedKph = obj.optDouble("speedKph", 0.0).toFloat(),
                 netPowerKw = obj.optDouble("netPowerKw", 0.0).toFloat(),
-                packVoltageV = obj.optDouble("packVoltageV", 384.0).toFloat(),
+                packVoltageV = obj.optDouble("packVoltageV", 0.0).toFloat(),
                 packCurrentA = obj.optDouble("packCurrentA", 0.0).toFloat(),
-                usableSocPct = obj.optDouble("usableSocPct", 75.0).toFloat(),
-                cellMinV = obj.optDouble("cellMinV", 3.950).toFloat(),
-                cellMaxV = obj.optDouble("cellMaxV", 3.962).toFloat(),
-                cellDeltaMv = obj.optDouble("cellDeltaMv", 12.0).toFloat(),
-                statorTempC = obj.optDouble("statorTempC", 45.0).toFloat(),
-                rearInverterTempC = obj.optDouble("rearInverterTempC", 38.0).toFloat(),
-                coolantBatteryInletC = obj.optDouble("coolantBatteryInletC", 28.0).toFloat(),
-                octovalvePosition = obj.optInt("octovalvePosition", 2),
-                gear = obj.optString("gear", "D")
+                usableSocPct = obj.optDouble("usableSocPct", 0.0).toFloat(),
+                cellMinV = obj.optDouble("cellMinV", 0.0).toFloat(),
+                cellMaxV = obj.optDouble("cellMaxV", 0.0).toFloat(),
+                cellDeltaMv = obj.optDouble("cellDeltaMv", 0.0).toFloat(),
+                statorTempC = obj.optDouble("statorTempC", 0.0).toFloat(),
+                rearInverterTempC = obj.optDouble("rearInverterTempC", 0.0).toFloat(),
+                coolantBatteryInletC = obj.optDouble("coolantBatteryInletC", 0.0).toFloat(),
+                octovalvePosition = obj.optInt("octovalvePosition", 0),
+                gear = obj.optString("gear", "--")
             )
         } catch (e: Exception) {
-            AlertFreezeFrame(0f, 0f, 384f, 0f, 75f, 3.95f, 3.96f, 10f, 45f, 38f, 28f, 2, "D")
+            AlertFreezeFrame(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0, "--")
         }
     }
 
@@ -377,161 +366,6 @@ object CockpitJsonSerializer {
                 isBuiltIn = true,
                 sortOrder = 4,
                 widgetsJson = encodeWidgets(dynamicsWidgets)
-            )
-        )
-    }
-
-    fun createInitialTeslaAlerts(nowMs: Long = System.currentTimeMillis()): List<VehicleAlertEntity> {
-        return listOf(
-            VehicleAlertEntity(
-                alertCode = "BMS_a063",
-                subsystem = TeslaSubsystem.BMS.name,
-                severity = AlertSeverity.WARNING.name,
-                title = "Brick Cell Voltage Imbalance Advisory",
-                description = "BMS detected cell brick #4 voltage delta exceeding 26 mV under peak 310 kW discharge load. Top-balancing recommended during next AC charge to 100%.",
-                recommendedAction = "Charge to 90-100% on Level 2 AC charger and allow 2 hours of BMS bleed-resistor balancing.",
-                rawCanIdHex = "0x3E2",
-                rawPayloadHex = "3F 00 1B 84 0F 94 0F AC",
-                freezeFrameJson = encodeFreezeFrame(
-                    AlertFreezeFrame(
-                        speedKph = 142.0f,
-                        netPowerKw = 312.4f,
-                        packVoltageV = 358.5f,
-                        packCurrentA = 872.0f,
-                        usableSocPct = 64.2f,
-                        cellMinV = 3.712f,
-                        cellMaxV = 3.741f,
-                        cellDeltaMv = 29.0f,
-                        statorTempC = 114.5f,
-                        rearInverterTempC = 82.0f,
-                        coolantBatteryInletC = 39.2f,
-                        octovalvePosition = 4,
-                        gear = "D"
-                    )
-                ),
-                timestampMs = nowMs - 1000L * 60 * 18,
-                isActive = true,
-                isAcknowledged = false
-            ),
-            VehicleAlertEntity(
-                alertCode = "DI_a138",
-                subsystem = TeslaSubsystem.DI_INVERTER.name,
-                severity = AlertSeverity.CRITICAL.name,
-                title = "Rear Drive Inverter Thermal Soft-Derate",
-                description = "Rear SiC MOSFET inverter junction temperature reached 96.4°C during repeated full-power canyon launches. Peak rear torque temporarily limited to 82%.",
-                recommendedAction = "Keep vehicle moving to maintain 28 L/min powertrain radiator airflow; verify supermanifold pump duty cycle.",
-                rawCanIdHex = "0x315",
-                rawPayloadHex = "8A 01 60 7F 1C 00 52 FF",
-                freezeFrameJson = encodeFreezeFrame(
-                    AlertFreezeFrame(
-                        speedKph = 168.0f,
-                        netPowerKw = 285.0f,
-                        packVoltageV = 362.1f,
-                        packCurrentA = 787.0f,
-                        usableSocPct = 58.0f,
-                        cellMinV = 3.740f,
-                        cellMaxV = 3.758f,
-                        cellDeltaMv = 18.0f,
-                        statorTempC = 138.2f,
-                        rearInverterTempC = 96.4f,
-                        coolantBatteryInletC = 43.5f,
-                        octovalvePosition = 6,
-                        gear = "D"
-                    )
-                ),
-                timestampMs = nowMs - 1000L * 60 * 42,
-                isActive = true,
-                isAcknowledged = false
-            ),
-            VehicleAlertEntity(
-                alertCode = "VCFRONT_a192",
-                subsystem = TeslaSubsystem.VCFRONT_THERMAL.name,
-                severity = AlertSeverity.INFO.name,
-                title = "Active Grille Shutter Calibration Sweep",
-                description = "Front fascia active louver actuator detected minor end-stop resistance during high-speed chiller purge cycle.",
-                recommendedAction = "Inspect front lower bumper intake louvers for road debris or ice buildup.",
-                rawCanIdHex = "0x241",
-                rawPayloadHex = "C0 00 2B 14 08 42 11 00",
-                freezeFrameJson = encodeFreezeFrame(
-                    AlertFreezeFrame(
-                        speedKph = 112.0f,
-                        netPowerKw = 42.0f,
-                        packVoltageV = 382.0f,
-                        packCurrentA = 110.0f,
-                        usableSocPct = 74.0f,
-                        cellMinV = 3.942f,
-                        cellMaxV = 3.950f,
-                        cellDeltaMv = 8.0f,
-                        statorTempC = 64.0f,
-                        rearInverterTempC = 48.0f,
-                        coolantBatteryInletC = 31.0f,
-                        octovalvePosition = 3,
-                        gear = "D"
-                    )
-                ),
-                timestampMs = nowMs - 1000L * 60 * 190,
-                isActive = false,
-                isAcknowledged = true
-            ),
-            VehicleAlertEntity(
-                alertCode = "HVP_a044",
-                subsystem = TeslaSubsystem.HVP_CHARGING.name,
-                severity = AlertSeverity.INFO.name,
-                title = "CCS / NACS Fast Charge Pilot Handshake",
-                description = "High Voltage Processor logged transient PLC pilot noise during V3 Supercharger cable lock engagement; session proceeded normally at 250 kW.",
-                recommendedAction = "Historical informational code. No service required unless DC fast-charge initiation fails.",
-                rawCanIdHex = "0x3E3",
-                rawPayloadHex = "2C 00 F8 02 7D 00 00 10",
-                freezeFrameJson = encodeFreezeFrame(
-                    AlertFreezeFrame(
-                        speedKph = 0.0f,
-                        netPowerKw = -248.5f,
-                        packVoltageV = 396.4f,
-                        packCurrentA = -626.8f,
-                        usableSocPct = 24.5f,
-                        cellMinV = 3.810f,
-                        cellMaxV = 3.829f,
-                        cellDeltaMv = 19.0f,
-                        statorTempC = 52.0f,
-                        rearInverterTempC = 44.0f,
-                        coolantBatteryInletC = 46.8f,
-                        octovalvePosition = 7,
-                        gear = "P"
-                    )
-                ),
-                timestampMs = nowMs - 1000L * 60 * 480,
-                isActive = false,
-                isAcknowledged = true
-            ),
-            VehicleAlertEntity(
-                alertCode = "ESP_a118",
-                subsystem = TeslaSubsystem.ESP_DYNAMICS.name,
-                severity = AlertSeverity.WARNING.name,
-                title = "Track Mode Stability Slip Threshold Reached",
-                description = "Bosch ESP9 controller engaged 14 bar rear-inside brake vectoring during 0.96G lateral corner exit.",
-                recommendedAction = "Normal Track Mode torque vectoring intervention; monitor rear tire tread temperature.",
-                rawCanIdHex = "0x145",
-                rawPayloadHex = "76 00 8E 62 2A 18 04 90",
-                freezeFrameJson = encodeFreezeFrame(
-                    AlertFreezeFrame(
-                        speedKph = 98.5f,
-                        netPowerKw = 218.0f,
-                        packVoltageV = 371.0f,
-                        packCurrentA = 587.6f,
-                        usableSocPct = 66.0f,
-                        cellMinV = 3.880f,
-                        cellMaxV = 3.896f,
-                        cellDeltaMv = 16.0f,
-                        statorTempC = 108.0f,
-                        rearInverterTempC = 79.0f,
-                        coolantBatteryInletC = 36.4f,
-                        octovalvePosition = 4,
-                        gear = "D"
-                    )
-                ),
-                timestampMs = nowMs - 1000L * 60 * 75,
-                isActive = false,
-                isAcknowledged = false
             )
         )
     }

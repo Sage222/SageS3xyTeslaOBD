@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -55,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.local.CockpitJsonSerializer
 import com.example.data.local.VehicleAlertEntity
 import com.example.model.AlertSeverity
+import com.example.model.ConnectionStatus
 import com.example.model.TeslaSubsystem
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.InverterAmber
@@ -98,7 +98,6 @@ fun DiagnosticsAlertsScreen(
         val isCanonicalListDetail = maxWidth >= 680.dp
 
         Column(modifier = Modifier.fillMaxSize()) {
-            // Top Interrogation & Subsystem Filter Bar
             DiagnosticsToolbar(
                 uiState = uiState,
                 activeCount = alerts.count { it.isActive },
@@ -111,7 +110,12 @@ fun DiagnosticsAlertsScreen(
                 onExportDiagnosticJson = onExportDiagnosticJson
             )
 
-            if (isCanonicalListDetail) {
+            if (filteredAlerts.isEmpty()) {
+                EmptyDiagnosticsState(
+                    isConnected = uiState.connectionStatus == ConnectionStatus.CONNECTED_LIVE,
+                    hostIp = uiState.s3xyHostIp
+                )
+            } else if (isCanonicalListDetail) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -132,15 +136,14 @@ fun DiagnosticsAlertsScreen(
                         modifier = Modifier
                             .weight(0.54f)
                             .fillMaxHeight()
+                            .verticalScroll(rememberScrollState())
                     ) {
                         if (selectedAlert != null) {
                             AlertFreezeFrameDetailCard(
                                 alert = selectedAlert,
                                 onAcknowledge = { onAcknowledgeSingle(selectedAlert.id) },
-                                modifier = Modifier.fillMaxSize()
+                                modifier = Modifier.fillMaxWidth()
                             )
-                        } else {
-                            EmptyDiagnosticsState()
                         }
                     }
                 }
@@ -154,7 +157,7 @@ fun DiagnosticsAlertsScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     if (selectedAlert != null) {
-                        item {
+                        item(key = "freeze_frame_${selectedAlert.id}") {
                             AlertFreezeFrameDetailCard(
                                 alert = selectedAlert,
                                 onAcknowledge = { onAcknowledgeSingle(selectedAlert.id) },
@@ -199,7 +202,6 @@ private fun DiagnosticsToolbar(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Action Row: Interrogate Bus, Clear Faults, Export JSON
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -268,7 +270,6 @@ private fun DiagnosticsToolbar(
                 }
             }
 
-            // Subsystem Filter Chips
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -433,6 +434,10 @@ private fun AlertSummaryItemCard(
     }
 }
 
+/**
+ * Note: Does NOT apply Modifier.verticalScroll internally so it can safely render inside
+ * a LazyColumn item on phone portrait screens without throwing nested scroll constraints exceptions.
+ */
 @Composable
 private fun AlertFreezeFrameDetailCard(
     alert: VehicleAlertEntity,
@@ -457,7 +462,6 @@ private fun AlertFreezeFrameDetailCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -466,7 +470,7 @@ private fun AlertFreezeFrameDetailCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "FREEZE-FRAME TELEMETRY SNAPSHOT",
                         style = MaterialTheme.typography.labelMedium,
@@ -519,7 +523,6 @@ private fun AlertFreezeFrameDetailCard(
                 }
             }
 
-            // Raw CAN Frame Hex Inspector
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 shape = RoundedCornerShape(10.dp),
@@ -548,7 +551,6 @@ private fun AlertFreezeFrameDetailCard(
                 }
             }
 
-            // Captured Freeze-Frame Metrics Grid
             Text(
                 text = "VEHICLE TELEMETRY AT FAULT TRIGGER",
                 style = MaterialTheme.typography.labelMedium,
@@ -608,15 +610,35 @@ private fun FreezeMetricBox(
 }
 
 @Composable
-private fun EmptyDiagnosticsState() {
+private fun EmptyDiagnosticsState(
+    isConnected: Boolean,
+    hostIp: String
+) {
     Box(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = "No matching alerts in this subsystem filter. Tap 'Interrogate CAN Bus' to scan.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = if (isConnected) "No Active Vehicle Faults or DTCs"
+                else "Awaiting S3XY_OBD Wi-Fi Connection ($hostIp)",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = if (isConnected) {
+                    "Connected to S3XY_OBD. Tap 'Interrogate CAN Bus' above to query ECU trouble codes (0x7DF / 0x3E2 / 0x3E3)."
+                } else {
+                    "Connect your device to the S3XY_OBD Wi-Fi network and tap 'Interrogate CAN Bus' to read real-time diagnostic alerts from your 2023 Model 3."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }

@@ -1,6 +1,11 @@
 package com.example.data.can
 
+import com.example.data.local.CockpitJsonSerializer
+import com.example.data.local.VehicleAlertEntity
+import com.example.model.AlertFreezeFrame
+import com.example.model.AlertSeverity
 import com.example.model.CanFramePacket
+import com.example.model.TeslaSubsystem
 import com.example.model.VehicleTelemetrySnapshot
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -9,13 +14,8 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Decodes and encodes binary Panda / CANserver UDP packets (Port 1338) and ELM327 ASCII frames
+ * Decodes binary Panda / CANserver UDP packets (Port 1338) and ELM327 ASCII frames
  * for 2023 Tesla Model 3 Vehicle & Chassis CAN-bus arbitration IDs.
- *
- * Standard Panda 16-byte CAN frame structure:
- * - Bytes 0..3 (UInt32 LE): (canId << 21) | (extendedFlag << 2)
- * - Bytes 4..7 (UInt32 LE): (busId << 4) | (dlc & 0x0F)
- * - Bytes 8..15 (8 bytes): Raw CAN payload
  */
 object Model3CanFrameDecoder {
 
@@ -28,7 +28,14 @@ object Model3CanFrameDecoder {
     const val ID_BMS_SOC_CAPACITY = 0x292      // Usable SOC, BMS SOC, Nominal Full Pack kWh
     const val ID_INVERTER_STATOR_TEMP = 0x315  // Rear/Front Inverter & Stator Temps
     const val ID_BMS_CELL_BRICKS = 0x332       // Cell Min/Max V, Delta mV, Brick Temp
-    const val ID_TESLA_ALERT_MUX = 0x3E2       // Subsystem Alert Multiplexer
+    const val ID_TESLA_BMS_ALERT_MUX = 0x3E2   // BMS Alert Multiplexer
+    const val ID_TESLA_HVP_ALERT_MUX = 0x3E3   // HVP / Thermal / DI Alert Multiplexer
+
+    data class DecodedCanBatch(
+        val snapshot: VehicleTelemetrySnapshot,
+        val frames: List<CanFramePacket>,
+        val alerts: List<VehicleAlertEntity>
+    )
 
     fun parsePandaUdpDatagram(
         data: ByteArray,
@@ -36,8 +43,19 @@ object Model3CanFrameDecoder {
         current: VehicleTelemetrySnapshot,
         timestampMs: Long = System.currentTimeMillis()
     ): Pair<VehicleTelemetrySnapshot, List<CanFramePacket>> {
+        val batch = parsePandaUdpDatagramWithAlerts(data, length, current, timestampMs)
+        return batch.snapshot to batch.frames
+    }
+
+    fun parsePandaUdpDatagramWithAlerts(
+        data: ByteArray,
+        length: Int,
+        current: VehicleTelemetrySnapshot,
+        timestampMs: Long = System.currentTimeMillis()
+    ): DecodedCanBatch {
         var updated = current.copy(timestampMs = timestampMs)
         val parsedFrames = mutableListOf<CanFramePacket>()
+        val decodedAlerts = mutableListOf<VehicleAlertEntity>()
         var offset = 0
 
         while (offset + 16 <= length) {
@@ -60,6 +78,9 @@ object Model3CanFrameDecoder {
                     decodedSummary = summary
                 )
             )
+            decodeAlertFromCanFrame(canId, payload, updated, timestampMs)?.let {
+                decodedAlerts.add(it)
+            }
             offset += 16
         }
 
@@ -67,16 +88,16 @@ object Model3CanFrameDecoder {
             val combinedFrames = (parsedFrames.reversed() + updated.recentCanFrames).take(24)
             updated = updated.copy(recentCanFrames = combinedFrames)
         }
-        return updated to parsedFrames
+        return DecodedCanBatch(updated, parsedFrames, decodedAlerts)
     }
 
-    fun parseElm327AsciiLine(
+    fun parseElm327AsciiLineWithAlerts(
         line: String,
         current: VehicleTelemetrySnapshot,
         timestampMs: Long = System.currentTimeMillis()
-    ): Pair<VehicleTelemetrySnapshot, CanFramePacket?> {
+    ): DecodedCanBatch {
         val cleaned = line.trim().replace(" ", "")
-        if (cleaned.length < 5) return current to null
+        if (cleaned.length < 5) return DecodedCanBatch(current, emptyList(), emptyList())
         return try {
             val canId = cleaned.substring(0, 3).toInt(16)
             val hexPayload = cleaned.substring(3)
@@ -92,10 +113,116 @@ object Model3CanFrameDecoder {
                 payload = payload,
                 decodedSummary = summary
             )
+            val alert = decodeAlertFromCanFrame(canId, payload, nextSnap, timestampMs)
             val combined = (listOf(frame) + nextSnap.recentCanFrames).take(24)
-            nextSnap.copy(recentCanFrames = combined) to frame
+            DecodedCanBatch(
+                snapshot = nextSnap.copy(recentCanFrames = combined),
+                frames = listOf(frame),
+                alerts = listOfNotNull(alert)
+            )
         } catch (e: Exception) {
-            current to null
+            DecodedCanBatch(current, emptyList(), emptyList())
+        }
+    }
+
+    private fun decodeAlertFromCanFrame(
+        canId: Int,
+        payload: ByteArray,
+        snapshot: VehicleTelemetrySnapshot,
+        timestampMs: Long
+    ): VehicleAlertEntity? {
+        if (payload.size < 4) return null
+        val canIdHex = "0x%03X".format(canId)
+        val payloadHex = payload.joinToString(" ") { "%02X".format(it) }
+        fun buildFreezeJson(): String = CockpitJsonSerializer.encodeFreezeFrame(
+            AlertFreezeFrame(
+                speedKph = snapshot.speedKph,
+                netPowerKw = snapshot.netPowerKw,
+                packVoltageV = snapshot.packVoltageV,
+                packCurrentA = snapshot.packCurrentA,
+                usableSocPct = snapshot.usableSocPct,
+                cellMinV = snapshot.cellMinV,
+                cellMaxV = snapshot.cellMaxV,
+                cellDeltaMv = snapshot.cellDeltaMv,
+                statorTempC = snapshot.statorTempC,
+                rearInverterTempC = snapshot.rearInverterTempC,
+                coolantBatteryInletC = snapshot.coolantBatteryInletC,
+                octovalvePosition = snapshot.octovalvePosition,
+                gear = snapshot.currentGear
+            )
+        )
+
+        return when (canId) {
+            ID_TESLA_BMS_ALERT_MUX -> {
+                val muxIndex = payload[0].toInt() and 0xFF
+                val activeBits = payload[1].toInt() and 0xFF
+                if (muxIndex == 0 || activeBits == 0) return null
+                val freezeJson = buildFreezeJson()
+                val code = "BMS_a%03d".format(muxIndex)
+                VehicleAlertEntity(
+                    alertCode = code,
+                    subsystem = TeslaSubsystem.BMS.name,
+                    severity = if (activeBits >= 2) AlertSeverity.CRITICAL.name else AlertSeverity.WARNING.name,
+                    title = "BMS CAN Alert $code (Mux 0x%02X)".format(muxIndex),
+                    description = "Decoded live BMS alert frame from S3XY_OBD on CAN ID $canIdHex [$payloadHex].",
+                    recommendedAction = "Inspect HV pack voltage (${snapshot.packVoltageV}V) and cell balance delta (${snapshot.cellDeltaMv} mV).",
+                    rawCanIdHex = canIdHex,
+                    rawPayloadHex = payloadHex,
+                    freezeFrameJson = freezeJson,
+                    timestampMs = timestampMs,
+                    isActive = true,
+                    isAcknowledged = false
+                )
+            }
+
+            ID_TESLA_HVP_ALERT_MUX -> {
+                val muxIndex = payload[0].toInt() and 0xFF
+                val activeBits = payload[1].toInt() and 0xFF
+                if (muxIndex == 0 || activeBits == 0) return null
+                val freezeJson = buildFreezeJson()
+                val code = "HVP_a%03d".format(muxIndex)
+                VehicleAlertEntity(
+                    alertCode = code,
+                    subsystem = TeslaSubsystem.HVP_CHARGING.name,
+                    severity = AlertSeverity.WARNING.name,
+                    title = "High Voltage Processor Alert $code",
+                    description = "Decoded live HVP alert frame from S3XY_OBD on CAN ID $canIdHex [$payloadHex].",
+                    recommendedAction = "Verify HV contactor state and charge port pilot signal.",
+                    rawCanIdHex = canIdHex,
+                    rawPayloadHex = payloadHex,
+                    freezeFrameJson = freezeJson,
+                    timestampMs = timestampMs,
+                    isActive = true,
+                    isAcknowledged = false
+                )
+            }
+
+            in 0x7E8..0x7EF -> {
+                // Standard ISO-TP / UDS Mode 03 (0x43) or Mode 19 (0x59) DTC response
+                val serviceId = payload[1].toInt() and 0xFF
+                if (serviceId != 0x43 && serviceId != 0x59) return null
+                val dtcHi = payload[2].toInt() and 0xFF
+                val dtcLo = payload[3].toInt() and 0xFF
+                if (dtcHi == 0 && dtcLo == 0) return null
+                val freezeJson = buildFreezeJson()
+                val dtcCode = "P%02X%02X".format(dtcHi, dtcLo)
+                VehicleAlertEntity(
+                    alertCode = dtcCode,
+                    subsystem = TeslaSubsystem.DI_INVERTER.name,
+                    severity = AlertSeverity.WARNING.name,
+                    title = "OBD-II / UDS Diagnostic Fault $dtcCode",
+                    description = "ECU ${"0x%03X".format(canId)} reported active diagnostic trouble code $dtcCode over S3XY_OBD.",
+                    recommendedAction = "Inspect freeze-frame telemetry and clear fault after verifying subsystem health.",
+                    rawCanIdHex = canIdHex,
+                    rawPayloadHex = payloadHex,
+                    freezeFrameJson = freezeJson,
+                    timestampMs = timestampMs,
+                    isActive = true,
+                    isAcknowledged = false
+                )
+            }
+
+            else -> null
         }
     }
 
@@ -124,7 +251,7 @@ object Model3CanFrameDecoder {
                 }
                 val throttle = (payload[3].toInt() and 0xFF).toFloat().coerceIn(0f, 100f)
                 val brake = (payload[4].toInt() and 0xFF).toFloat().coerceIn(0f, 100f)
-                val sprint = ((payload[5].toInt() and 0xFF) * 0.02f + 2.5f).coerceIn(2.6f, 9.9f)
+                val sprint = ((payload[5].toInt() and 0xFF) * 0.02f + 2.5f).coerceIn(0.0f, 9.9f)
                 val snap = current.copy(
                     timestampMs = timestampMs,
                     speedKph = speedKph,
@@ -144,7 +271,7 @@ object Model3CanFrameDecoder {
                 val voltsRaw = buf.getShort(0).toInt() and 0xFFFF
                 val ampsSigned = buf.getShort(2).toInt()
                 val chargeRaw = buf.getShort(4).toInt() and 0xFFFF
-                val packV = (voltsRaw * 0.01f).coerceIn(280f, 415f)
+                val packV = (voltsRaw * 0.01f).coerceIn(0f, 415f)
                 val packA = (ampsSigned * 0.1f).coerceIn(-700f, 1000f)
                 val netKw = (packV * packA) / 1000f
                 val chargeKw = (chargeRaw * 0.1f).coerceIn(0f, 260f)
@@ -197,8 +324,8 @@ object Model3CanFrameDecoder {
                 val initCapRaw = buf.getShort(6).toInt() and 0xFFFF
                 val usableSoc = (usableRaw * 0.1f).coerceIn(0f, 100f)
                 val bmsSoc = (bmsRaw * 0.1f).coerceIn(0f, 100f)
-                val nomKwh = (nomFullRaw * 0.1f).coerceIn(50f, 82f)
-                val initKwh = (initCapRaw * 0.1f).coerceIn(60f, 82f)
+                val nomKwh = (nomFullRaw * 0.1f).coerceIn(0f, 82f)
+                val initKwh = (initCapRaw * 0.1f).coerceIn(1f, 82f)
                 val degPct = (((initKwh - nomKwh) / initKwh) * 100f).coerceIn(0f, 25f)
                 val snap = current.copy(
                     timestampMs = timestampMs,
@@ -216,14 +343,14 @@ object Model3CanFrameDecoder {
                 val maxCellMv = buf.getShort(2).toInt() and 0xFFFF
                 val minTempRaw = payload[4].toInt()
                 val maxTempRaw = payload[5].toInt()
-                val cellMinV = (minCellMv / 1000f).coerceIn(3.000f, 4.250f)
-                val cellMaxV = (maxCellMv / 1000f).coerceIn(3.000f, 4.250f)
-                val deltaMv = ((maxCellMv - minCellMv).toFloat()).coerceIn(1f, 120f)
-                val spread = (cellMaxV - cellMinV).coerceAtLeast(0.002f)
+                val cellMinV = (minCellMv / 1000f).coerceIn(0.000f, 4.250f)
+                val cellMaxV = (maxCellMv / 1000f).coerceIn(0.000f, 4.250f)
+                val deltaMv = ((maxCellMv - minCellMv).toFloat()).coerceIn(0f, 120f)
+                val spread = (cellMaxV - cellMinV).coerceAtLeast(0.001f)
                 val bricks = List(12) { idx ->
                     val ratio = when (idx) {
-                        3 -> 1.0f // highest brick
-                        5 -> 0.0f // lowest brick
+                        3 -> 1.0f
+                        5 -> 0.0f
                         else -> 0.25f + ((idx * 37) % 60) / 100f
                     }
                     cellMinV + spread * ratio
@@ -312,11 +439,6 @@ object Model3CanFrameDecoder {
         }
     }
 
-    /**
-     * Encodes a complete VehicleTelemetrySnapshot into a multi-frame binary Panda UDP packet
-     * (9 x 16-byte frames = 144 bytes) so the Replay Engine and tests run through the exact
-     * same binary CAN-bus decoder as live S3XY_OBD Wi-Fi UDP traffic.
-     */
     fun encodeSnapshotToPandaUdpPacket(snapshot: VehicleTelemetrySnapshot): ByteArray {
         val out = ByteBuffer.allocate(9 * 16).order(ByteOrder.LITTLE_ENDIAN)
 
@@ -330,7 +452,6 @@ object Model3CanFrameDecoder {
             out.put(payloadBuf.array())
         }
 
-        // 1. 0x257 UI Speed & Gear
         writeFrame(ID_UI_SPEED_GEAR, 0) { b ->
             b.putShort((snapshot.speedKph / 0.05f).toInt().toShort())
             val gearByte = when (snapshot.currentGear) {
@@ -347,7 +468,6 @@ object Model3CanFrameDecoder {
             b.put(0)
         }
 
-        // 2. 0x132 HV Battery Volts & Amps
         writeFrame(ID_HV_BATTERY_VOLT_AMP, 0) { b ->
             b.putShort((snapshot.packVoltageV * 100f).toInt().toShort())
             b.putShort((snapshot.packCurrentA * 10f).toInt().toShort())
@@ -355,7 +475,6 @@ object Model3CanFrameDecoder {
             b.putShort(0)
         }
 
-        // 3. 0x108 Rear Drive Unit
         writeFrame(ID_REAR_DRIVE_UNIT, 0) { b ->
             b.putShort((snapshot.rearTorqueNm * 2f).toInt().toShort())
             b.putShort(snapshot.rearRpm.toShort())
@@ -363,7 +482,6 @@ object Model3CanFrameDecoder {
             b.putShort(0)
         }
 
-        // 4. 0x118 Front Drive Unit
         writeFrame(ID_FRONT_DRIVE_UNIT, 0) { b ->
             b.putShort((snapshot.frontTorqueNm * 2f).toInt().toShort())
             b.putShort(snapshot.frontRpm.toShort())
@@ -371,7 +489,6 @@ object Model3CanFrameDecoder {
             b.putShort(0)
         }
 
-        // 5. 0x292 BMS SOC & Capacity
         writeFrame(ID_BMS_SOC_CAPACITY, 0) { b ->
             b.putShort((snapshot.usableSocPct * 10f).toInt().toShort())
             b.putShort((snapshot.bmsSocPct * 10f).toInt().toShort())
@@ -379,7 +496,6 @@ object Model3CanFrameDecoder {
             b.putShort((snapshot.initialPackKwh * 10f).toInt().toShort())
         }
 
-        // 6. 0x332 BMS Cell Bricks
         writeFrame(ID_BMS_CELL_BRICKS, 0) { b ->
             b.putShort((snapshot.cellMinV * 1000f).toInt().toShort())
             b.putShort((snapshot.cellMaxV * 1000f).toInt().toShort())
@@ -388,7 +504,6 @@ object Model3CanFrameDecoder {
             b.putShort(0)
         }
 
-        // 7. 0x241 VCFront Thermal & Octovalve
         writeFrame(ID_VCFRONT_THERMAL, 1) { b ->
             b.put((snapshot.coolantBatteryInletC * 2f).toInt().toByte())
             b.put((snapshot.coolantPowertrainInletC * 2f).toInt().toByte())
@@ -400,7 +515,6 @@ object Model3CanFrameDecoder {
             b.put((snapshot.hvacPowerKw * 20f).toInt().toByte())
         }
 
-        // 8. 0x315 Inverter & Stator Temps
         writeFrame(ID_INVERTER_STATOR_TEMP, 0) { b ->
             b.putShort((snapshot.rearInverterTempC * 10f).toInt().toShort())
             b.putShort((snapshot.frontInverterTempC * 10f).toInt().toShort())
@@ -408,7 +522,6 @@ object Model3CanFrameDecoder {
             b.putShort(0)
         }
 
-        // 9. 0x145 ESP Dynamics & G-Force
         writeFrame(ID_ESP_DYNAMICS, 0) { b ->
             b.putShort((snapshot.lateralG * 100f).toInt().toShort())
             b.putShort((snapshot.longitudinalG * 100f).toInt().toShort())
@@ -428,6 +541,7 @@ object Model3CanFrameDecoder {
         5 -> "Step 5: Heat Pump Cabin Heating + Chiller"
         6 -> "Step 6: Supercharger Pack Preconditioning"
         7 -> "Step 7: Max Chiller Active Battery Cooling"
-        else -> "Step 8: Sub-Zero Series Stator Heat Recovery"
+        8 -> "Step 8: Sub-Zero Series Stator Heat Recovery"
+        else -> "Awaiting S3XY_OBD CAN stream..."
     }
 }

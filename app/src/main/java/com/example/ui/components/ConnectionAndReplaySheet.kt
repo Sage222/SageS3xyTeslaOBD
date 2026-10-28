@@ -4,7 +4,6 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,7 +13,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,11 +21,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.LightMode
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -38,8 +34,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -56,8 +50,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.model.BundledCanTrace
-import com.example.model.ConnectionMode
 import com.example.model.ConnectionStatus
 import com.example.model.S3xyProtocol
 import com.example.ui.theme.ElectricCyan
@@ -79,7 +71,6 @@ fun CockpitTopStatusBar(
     val badgeColor by animateColorAsState(
         targetValue = when (uiState.connectionStatus) {
             ConnectionStatus.CONNECTED_LIVE -> RegenEmerald
-            ConnectionStatus.REPLAYING_LOG -> ElectricCyan
             ConnectionStatus.CONNECTING -> InverterAmber
             ConnectionStatus.SOCKET_ERROR, ConnectionStatus.DISCONNECTED -> TrackCrimson
         },
@@ -99,13 +90,12 @@ fun CockpitTopStatusBar(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Left: Brand + Connection Pill
+                // Left: Gear + S3XY_OBD Connection Pill
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    // Gear PRND Pill
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         shape = RoundedCornerShape(8.dp),
@@ -121,7 +111,6 @@ fun CockpitTopStatusBar(
                         )
                     }
 
-                    // Connection Status Chip (Opens S3XY_OBD Wi-Fi & Replay Drawer)
                     Surface(
                         modifier = Modifier
                             .clip(RoundedCornerShape(10.dp))
@@ -150,10 +139,7 @@ fun CockpitTopStatusBar(
                                     color = badgeColor
                                 )
                                 Text(
-                                    text = "${uiState.busFrameRateFps} msg/s • ${
-                                        if (uiState.connectionMode == ConnectionMode.LIVE_S3XY_WIFI) uiState.s3xyHostIp
-                                        else uiState.activeReplayTrace.tag
-                                    }",
+                                    text = "${uiState.busFrameRateFps} msg/s • ${uiState.s3xyHostIp}:${uiState.s3xyPort}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
@@ -218,64 +204,49 @@ fun CockpitTopStatusBar(
                 }
             }
 
-            // If in Recorded CAN Replay Mode, show compact scrub & speed control strip
-            if (uiState.connectionMode == ConnectionMode.CAN_LOG_REPLAY) {
-                ReplayControlStrip(
-                    uiState = uiState,
-                    onOpenConnectionSheet = onOpenConnectionSheet
-                )
+            if (uiState.connectionStatus != ConnectionStatus.CONNECTED_LIVE) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onOpenConnectionSheet)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.WifiOff,
+                                contentDescription = "S3XY_OBD Status",
+                                tint = InverterAmber,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Text(
+                                text = uiState.statusMessage,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Text(
+                            text = "CONFIGURE",
+                            fontFamily = JetBrainsMonoFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = ElectricCyan
+                        )
+                    }
+                }
             }
-        }
-    }
-}
-
-@Composable
-fun ReplayControlStrip(
-    uiState: CockpitUiState,
-    onTogglePause: (() -> Unit)? = null,
-    onSpeedSelected: ((Float) -> Unit)? = null,
-    onSeek: ((Float) -> Unit)? = null,
-    onOpenConnectionSheet: () -> Unit
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable { onOpenConnectionSheet() }
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Router,
-                    contentDescription = "CAN Replay Source",
-                    tint = ElectricCyan,
-                    modifier = Modifier.size(15.dp)
-                )
-                Text(
-                    text = uiState.statusMessage,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            Text(
-                text = "${uiState.replayElapsedSec}s / ${uiState.replayTotalSec}s • ${uiState.replaySpeedMultiplier}x",
-                fontFamily = JetBrainsMonoFamily,
-                fontSize = 11.sp,
-                color = ElectricCyan
-            )
         }
     }
 }
@@ -287,10 +258,7 @@ fun S3xyConnectionModalSheet(
     onDismiss: () -> Unit,
     onUpdateNetworkConfig: (String, String, String, Int, S3xyProtocol) -> Unit,
     onConnectLiveWifi: (Boolean) -> Unit,
-    onSelectBundledTrace: (BundledCanTrace) -> Unit,
-    onToggleReplayPause: () -> Unit,
-    onSelectReplaySpeed: (Float) -> Unit,
-    onSeekReplay: (Float) -> Unit
+    onDisconnect: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var ssid by remember(uiState.s3xySsid) { mutableStateOf(uiState.s3xySsid) }
@@ -312,17 +280,16 @@ fun S3xyConnectionModalSheet(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Text(
-                text = "S3XY_OBD Wi-Fi & CAN Replay Controller",
+                text = "S3XY_OBD Wi-Fi Socket Configuration",
                 style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = "Connect directly to your 2023 Model 3 Enhance S3XY Commander over Wi-Fi (192.168.4.1) or replay recorded multi-bus CAN captures.",
+                text = "Connect directly to your 2023 Tesla Model 3 Enhance S3XY Commander Wi-Fi access point (S3XY_OBD) for live CAN-bus telemetry and fault interrogation.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            // Section 1: Live S3XY_OBD Wi-Fi Configuration
             Surface(
                 shape = MaterialTheme.shapes.medium,
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -344,7 +311,7 @@ fun S3xyConnectionModalSheet(
                             tint = ElectricCyan
                         )
                         Text(
-                            text = "1. Live S3XY_OBD Wi-Fi Socket",
+                            text = "Enhance S3XY Commander Link",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
@@ -435,139 +402,15 @@ fun S3xyConnectionModalSheet(
                             Text("Bind S3XY_OBD Wi-Fi")
                         }
                     }
-                }
-            }
 
-            // Section 2: Recorded CAN Log Replay Engine
-            Surface(
-                shape = MaterialTheme.shapes.medium,
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text(
-                        text = "2. Recorded 2023 Model 3 CAN Log Replay",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = RegenEmerald
-                    )
-
-                    // Playback Transport Controls (Play/Pause, Timeline Scrub, Speed Multipliers)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                    if (uiState.connectionStatus == ConnectionStatus.CONNECTED_LIVE ||
+                        uiState.connectionStatus == ConnectionStatus.CONNECTING
                     ) {
-                        Button(
-                            onClick = onToggleReplayPause,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (uiState.isReplayPaused) RegenEmerald else ElectricCyan
-                            )
+                        OutlinedButton(
+                            onClick = onDisconnect,
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(
-                                imageVector = if (uiState.isReplayPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(if (uiState.isReplayPaused) "Resume Replay" else "Pause Replay")
-                        }
-
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.horizontalScroll(rememberScrollState())
-                        ) {
-                            listOf(0.5f, 1.0f, 2.0f, 4.0f).forEach { spd ->
-                                FilterChip(
-                                    selected = uiState.replaySpeedMultiplier == spd,
-                                    onClick = { onSelectReplaySpeed(spd) },
-                                    label = { Text("${spd}x") }
-                                )
-                            }
-                        }
-                    }
-
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "Scrub CAN Timeline",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = "${uiState.replayElapsedSec}s / ${uiState.replayTotalSec}s",
-                                fontFamily = JetBrainsMonoFamily,
-                                fontSize = 11.sp,
-                                color = ElectricCyan
-                            )
-                        }
-                        Slider(
-                            value = uiState.replayProgress,
-                            onValueChange = onSeekReplay,
-                            colors = SliderDefaults.colors(
-                                thumbColor = ElectricCyan,
-                                activeTrackColor = ElectricCyan
-                            )
-                        )
-                    }
-
-                    // 4 Bundled 2023 Model 3 CAN Traces
-                    BundledCanTrace.entries.forEach { trace ->
-                        val isSelected = uiState.connectionMode == ConnectionMode.CAN_LOG_REPLAY &&
-                            uiState.activeReplayTrace == trace
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { onSelectBundledTrace(trace) }
-                                .testTag("replay_trace_${trace.id}"),
-                            color = if (isSelected) ElectricCyan.copy(alpha = 0.14f)
-                            else MaterialTheme.colorScheme.surface,
-                            shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(
-                                1.dp,
-                                if (isSelected) ElectricCyan else MaterialTheme.colorScheme.outline
-                            )
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = trace.title,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = trace.subtitle,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Surface(
-                                    color = MaterialTheme.colorScheme.surfaceVariant,
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Text(
-                                        text = trace.tag,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = ElectricCyan,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    )
-                                }
-                            }
+                            Text("Disconnect S3XY_OBD Socket", color = TrackCrimson)
                         }
                     }
                 }

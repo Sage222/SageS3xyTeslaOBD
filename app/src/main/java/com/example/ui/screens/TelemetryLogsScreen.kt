@@ -25,7 +25,6 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.FileDownload
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
@@ -77,7 +76,6 @@ fun TelemetryLogsScreen(
     sessions: List<TelemetrySessionEntity>,
     onToggleRecording: () -> Unit,
     onSelectSession: (Long) -> Unit,
-    onReplaySession: (TelemetrySessionEntity) -> Unit,
     onExportCsv: (TelemetrySessionEntity) -> Unit,
     onExportJson: (TelemetrySessionEntity?) -> Unit,
     onDeleteSession: (TelemetrySessionEntity) -> Unit,
@@ -97,7 +95,6 @@ fun TelemetryLogsScreen(
         val isWide = maxWidth >= 680.dp
 
         Column(modifier = Modifier.fillMaxSize()) {
-            // Top Recording & Clear Logs Control Bar
             LogsTopActionStrip(
                 uiState = uiState,
                 sessionCount = sessions.size,
@@ -110,7 +107,8 @@ fun TelemetryLogsScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f),
+                        .weight(1f)
+                        .padding(24.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(
@@ -118,12 +116,12 @@ fun TelemetryLogsScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = "No Recorded Telemetry Sessions",
+                            text = "No Recorded S3XY_OBD Telemetry Sessions",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "Tap 'Start Session Log' above to capture 2023 Model 3 CAN metrics to on-device Room storage.",
+                            text = "Connect to your S3XY_OBD Wi-Fi (192.168.4.1) and tap 'Start Session Log' to record live 2023 Model 3 CAN metrics.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -149,7 +147,6 @@ fun TelemetryLogsScreen(
                                 session = session,
                                 isSelected = session.id == activeSession?.id,
                                 onSelect = { onSelectSession(session.id) },
-                                onReplay = { onReplaySession(session) },
                                 onExportCsv = { onExportCsv(session) },
                                 onDelete = { onDeleteSession(session) }
                             )
@@ -160,9 +157,6 @@ fun TelemetryLogsScreen(
                         SessionDetailChartCard(
                             session = activeSession,
                             samples = uiState.selectedLogSamples,
-                            onReplay = { onReplaySession(activeSession) },
-                            onExportCsv = { onExportCsv(activeSession) },
-                            onExportJson = { onExportJson(activeSession) },
                             modifier = Modifier
                                 .weight(0.55f)
                                 .fillMaxHeight()
@@ -179,13 +173,10 @@ fun TelemetryLogsScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     if (activeSession != null) {
-                        item {
+                        item(key = "session_chart_${activeSession.id}") {
                             SessionDetailChartCard(
                                 session = activeSession,
                                 samples = uiState.selectedLogSamples,
-                                onReplay = { onReplaySession(activeSession) },
-                                onExportCsv = { onExportCsv(activeSession) },
-                                onExportJson = { onExportJson(activeSession) },
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }
@@ -196,7 +187,6 @@ fun TelemetryLogsScreen(
                             session = session,
                             isSelected = session.id == activeSession?.id,
                             onSelect = { onSelectSession(session.id) },
-                            onReplay = { onReplaySession(session) },
                             onExportCsv = { onExportCsv(session) },
                             onDelete = { onDeleteSession(session) }
                         )
@@ -315,7 +305,6 @@ private fun SessionSummaryCard(
     session: TelemetrySessionEntity,
     isSelected: Boolean,
     onSelect: () -> Unit,
-    onReplay: () -> Unit,
     onExportCsv: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -401,38 +390,18 @@ private fun SessionSummaryCard(
                 )
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            OutlinedButton(
+                onClick = onExportCsv,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Button(
-                    onClick = onReplay,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Replay in Cockpit", fontWeight = FontWeight.Bold)
-                }
-
-                OutlinedButton(
-                    onClick = onExportCsv,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.FileDownload,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Export CSV")
-                }
+                Icon(
+                    imageVector = Icons.Default.FileDownload,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Export Session CSV")
             }
         }
     }
@@ -442,9 +411,6 @@ private fun SessionSummaryCard(
 private fun SessionDetailChartCard(
     session: TelemetrySessionEntity,
     samples: List<TelemetrySampleEntity>,
-    onReplay: () -> Unit,
-    onExportCsv: () -> Unit,
-    onExportJson: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -470,7 +436,6 @@ private fun SessionDetailChartCard(
                 color = MaterialTheme.colorScheme.onSurface
             )
 
-            // Multi-Channel Time-Series Plot (Speed Cyan, Net Power Amber, Stator Temp Crimson)
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                 shape = RoundedCornerShape(10.dp),
@@ -515,7 +480,6 @@ private fun SessionDetailChartCard(
                 }
             }
 
-            // Legend & Summary Readouts
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween

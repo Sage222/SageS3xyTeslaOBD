@@ -13,10 +13,6 @@ import com.example.data.local.TelemetrySampleEntity
 import com.example.data.local.TelemetrySessionEntity
 import com.example.data.local.VehicleAlertEntity
 import com.example.data.repository.TelemetryRepository
-import com.example.model.AlertFreezeFrame
-import com.example.model.AlertSeverity
-import com.example.model.BundledCanTrace
-import com.example.model.ConnectionMode
 import com.example.model.ConnectionStatus
 import com.example.model.DashboardWidgetConfig
 import com.example.model.MetricPid
@@ -46,28 +42,21 @@ enum class CockpitTab(val title: String) {
     COCKPIT("Cockpit"),
     CHASSIS_XRAY("X-Ray Flow"),
     ALERTS_DTC("Alerts / DTC"),
-    LOGS_REPLAY("Logs & Replay")
+    LOGS_REPLAY("Logs")
 }
 
 data class CockpitUiState(
     val currentTab: CockpitTab = CockpitTab.COCKPIT,
     val isDarkTheme: Boolean = true,
-    // Connection & Replay state
-    val connectionMode: ConnectionMode = ConnectionMode.CAN_LOG_REPLAY,
-    val connectionStatus: ConnectionStatus = ConnectionStatus.REPLAYING_LOG,
-    val statusMessage: String = "CAN Replay: Canyon Spirited Drive (Dual Motor AWD)",
+    // S3XY_OBD Live Wi-Fi Connection State
+    val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
+    val statusMessage: String = "Offline — Tap to connect to S3XY_OBD Wi-Fi (192.168.4.1)",
     val s3xySsid: String = "S3XY_OBD",
     val s3xyPassphrase: String = "12345678",
     val s3xyHostIp: String = "192.168.4.1",
     val s3xyPort: Int = 1338,
     val s3xyProtocol: S3xyProtocol = S3xyProtocol.PANDA_UDP_1338,
-    val busFrameRateFps: Int = 90,
-    val activeReplayTrace: BundledCanTrace = BundledCanTrace.CANYON_SPIRITED_RUN,
-    val isReplayPaused: Boolean = false,
-    val replaySpeedMultiplier: Float = 1.0f,
-    val replayProgress: Float = 0f,
-    val replayElapsedSec: Int = 0,
-    val replayTotalSec: Int = 120,
+    val busFrameRateFps: Int = 0,
     val showConnectionSheet: Boolean = false,
     // Live Telemetry & History Sparklines
     val snapshot: VehicleTelemetrySnapshot = VehicleTelemetrySnapshot(),
@@ -137,24 +126,14 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
         onSocketStateChanged = { connected, message ->
             _uiState.update { state ->
                 val status = when {
-                    state.connectionMode == ConnectionMode.CAN_LOG_REPLAY && connected ->
-                        ConnectionStatus.REPLAYING_LOG
                     connected -> ConnectionStatus.CONNECTED_LIVE
                     message.contains("Connecting") -> ConnectionStatus.CONNECTING
                     else -> ConnectionStatus.SOCKET_ERROR
                 }
                 state.copy(
                     connectionStatus = status,
+                    busFrameRateFps = if (connected) state.busFrameRateFps else 0,
                     statusMessage = message
-                )
-            }
-        },
-        onReplayProgressChanged = { progress, elapsedSec, totalSec ->
-            _uiState.update {
-                it.copy(
-                    replayProgress = progress,
-                    replayElapsedSec = elapsedSec,
-                    replayTotalSec = totalSec
                 )
             }
         }
@@ -163,28 +142,40 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
     init {
         viewModelScope.launch {
             repository.ensureSeeded()
-            transportEngine.startRecordedCanReplay(BundledCanTrace.CANYON_SPIRITED_RUN)
+            // Attempt automatic live connection to 192.168.4.1:1338 if user is already on S3XY_OBD Wi-Fi
+            val st = _uiState.value
+            transportEngine.startLiveSocket(st.s3xyHostIp, st.s3xyPort, st.s3xyProtocol)
         }
     }
 
     private fun handleIncomingBinaryPacket(bytes: ByteArray, length: Int, fps: Int) {
+        val batch = Model3CanFrameDecoder.parsePandaUdpDatagramWithAlerts(
+            data = bytes,
+            length = length,
+            current = _uiState.value.snapshot
+        )
         _uiState.update { state ->
-            val (nextSnap, _) = Model3CanFrameDecoder.parsePandaUdpDatagram(
-                data = bytes,
-                length = length,
-                current = state.snapshot
-            )
-            updateTelemetryMaps(state, nextSnap, fps)
+            updateTelemetryMaps(state, batch.snapshot, fps)
+        }
+        if (batch.alerts.isNotEmpty()) {
+            viewModelScope.launch {
+                batch.alerts.forEach { repository.insertOrUpdateLiveAlert(it) }
+            }
         }
     }
 
     private fun handleIncomingAsciiLine(line: String, fps: Int) {
+        val batch = Model3CanFrameDecoder.parseElm327AsciiLineWithAlerts(
+            line = line,
+            current = _uiState.value.snapshot
+        )
         _uiState.update { state ->
-            val (nextSnap, _) = Model3CanFrameDecoder.parseElm327AsciiLine(
-                line = line,
-                current = state.snapshot
-            )
-            updateTelemetryMaps(state, nextSnap, fps)
+            updateTelemetryMaps(state, batch.snapshot, fps)
+        }
+        if (batch.alerts.isNotEmpty()) {
+            viewModelScope.launch {
+                batch.alerts.forEach { repository.insertOrUpdateLiveAlert(it) }
+            }
         }
     }
 
@@ -232,7 +223,7 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
         _uiState.update { it.copy(snackbarMessage = null) }
     }
 
-    // S3XY_OBD Connection & Replay Controls
+    // S3XY_OBD Live Wi-Fi Controls
     fun updateS3xyNetworkConfig(
         ssid: String,
         passphrase: String,
@@ -255,7 +246,6 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
         val state = _uiState.value
         _uiState.update {
             it.copy(
-                connectionMode = ConnectionMode.LIVE_S3XY_WIFI,
                 connectionStatus = ConnectionStatus.CONNECTING,
                 statusMessage = "Binding to ${state.s3xySsid} (${state.s3xyHostIp}:${state.s3xyPort})..."
             )
@@ -266,6 +256,8 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
                 _uiState.update { it.copy(statusMessage = msg, snackbarMessage = msg) }
                 if (ok) {
                     transportEngine.startLiveSocket(state.s3xyHostIp, state.s3xyPort, state.s3xyProtocol)
+                } else {
+                    _uiState.update { it.copy(connectionStatus = ConnectionStatus.SOCKET_ERROR) }
                 }
             }
         } else {
@@ -273,55 +265,16 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
         }
     }
 
-    fun startBundledCanReplay(trace: BundledCanTrace) {
+    fun disconnectS3xySocket() {
+        transportEngine.stopAll()
         _uiState.update {
             it.copy(
-                connectionMode = ConnectionMode.CAN_LOG_REPLAY,
-                connectionStatus = ConnectionStatus.REPLAYING_LOG,
-                activeReplayTrace = trace,
-                isReplayPaused = false,
-                statusMessage = "CAN Replay: ${trace.title}",
-                snackbarMessage = "Loaded 2023 Model 3 CAN trace: ${trace.title}"
+                connectionStatus = ConnectionStatus.DISCONNECTED,
+                busFrameRateFps = 0,
+                statusMessage = "Disconnected from S3XY_OBD socket",
+                snackbarMessage = "Disconnected from S3XY_OBD socket"
             )
         }
-        transportEngine.startRecordedCanReplay(trace, null)
-    }
-
-    fun replayRecordedSession(session: TelemetrySessionEntity) {
-        viewModelScope.launch {
-            val samples = repository.getSamplesForSession(session.id)
-            if (samples.isEmpty()) {
-                _uiState.update { it.copy(snackbarMessage = "Session has no recorded samples to replay.") }
-                return@launch
-            }
-            _uiState.update {
-                it.copy(
-                    currentTab = CockpitTab.COCKPIT,
-                    connectionMode = ConnectionMode.CAN_LOG_REPLAY,
-                    connectionStatus = ConnectionStatus.REPLAYING_LOG,
-                    isReplayPaused = false,
-                    statusMessage = "Replaying Log: ${session.title}",
-                    snackbarMessage = "Replaying '${session.title}' through live cockpit gauges"
-                )
-            }
-            transportEngine.startRecordedCanReplay(_uiState.value.activeReplayTrace, samples)
-        }
-    }
-
-    fun toggleReplayPause() {
-        val nextPaused = !_uiState.value.isReplayPaused
-        transportEngine.setReplayPaused(nextPaused)
-        _uiState.update { it.copy(isReplayPaused = nextPaused) }
-    }
-
-    fun setReplaySpeed(multiplier: Float) {
-        transportEngine.setReplaySpeed(multiplier)
-        _uiState.update { it.copy(replaySpeedMultiplier = multiplier) }
-    }
-
-    fun seekReplay(fraction: Float) {
-        transportEngine.seekReplayProgress(fraction, _uiState.value.activeReplayTrace)
-        _uiState.update { it.copy(replayProgress = fraction) }
     }
 
     fun resetPeakHoldValues() {
@@ -502,7 +455,7 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
         }
     }
 
-    // Diagnostic Alert Interrogation & Clear Commands
+    // Diagnostic Alert Interrogation & Clear Commands (Strictly Real S3XY_OBD Socket)
     fun selectSubsystemFilter(subsystem: TeslaSubsystem) {
         _uiState.update { it.copy(selectedSubsystemFilter = subsystem) }
     }
@@ -517,65 +470,12 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
 
     fun interrogateCanBusSubsystems() {
         if (_uiState.value.isInterrogatingBus) return
-        viewModelScope.launch {
-            _uiState.update { it.copy(isInterrogatingBus = true) }
-            delay(950)
-            val snap = _uiState.value.snapshot
-            val freezeFrame = AlertFreezeFrame(
-                speedKph = snap.speedKph,
-                netPowerKw = snap.netPowerKw,
-                packVoltageV = snap.packVoltageV,
-                packCurrentA = snap.packCurrentA,
-                usableSocPct = snap.usableSocPct,
-                cellMinV = snap.cellMinV,
-                cellMaxV = snap.cellMaxV,
-                cellDeltaMv = snap.cellDeltaMv,
-                statorTempC = snap.statorTempC,
-                rearInverterTempC = snap.rearInverterTempC,
-                coolantBatteryInletC = snap.coolantBatteryInletC,
-                octovalvePosition = snap.octovalvePosition,
-                gear = snap.currentGear
-            )
-
-            // Capture live anomaly if stator temp or cell delta is elevated, or log a live bus health snapshot
-            val newAlert = if (snap.statorTempC >= 115f || snap.cellDeltaMv >= 20f) {
-                VehicleAlertEntity(
-                    alertCode = "DI_a142",
-                    subsystem = TeslaSubsystem.DI_INVERTER.name,
-                    severity = AlertSeverity.WARNING.name,
-                    title = "Live Scan: Elevated Stator Winding Thermal Load",
-                    description = "S3XY_OBD UDS interrogation captured rear stator temperature at ${"%.1f".format(snap.statorTempC)}°C with cell delta ${"%.1f".format(snap.cellDeltaMv)} mV.",
-                    recommendedAction = "Verify Octovalve Step ${snap.octovalvePosition} coolant flow (${"%.1f".format(snap.powertrainCoolantLpm)} L/min).",
-                    rawCanIdHex = "0x315",
-                    rawPayloadHex = "8E 01 74 04 1D 00 3A FF",
-                    freezeFrameJson = CockpitJsonSerializer.encodeFreezeFrame(freezeFrame),
-                    timestampMs = System.currentTimeMillis(),
-                    isActive = true,
-                    isAcknowledged = false
-                )
-            } else {
-                VehicleAlertEntity(
-                    alertCode = "VCFRONT_a088",
-                    subsystem = TeslaSubsystem.VCFRONT_THERMAL.name,
-                    severity = AlertSeverity.INFO.name,
-                    title = "Live Scan: Subsystems Nominal (Octovalve Step ${snap.octovalvePosition})",
-                    description = "Interrogated BMS, DI, VCFront, HVP, and ESP modules over S3XY_OBD CAN bridge. Pack voltage ${"%.1f".format(snap.packVoltageV)}V with ${"%.1f".format(snap.cellDeltaMv)} mV cell delta.",
-                    recommendedAction = "All HV isolation and thermal loops within factory specification.",
-                    rawCanIdHex = "0x241",
-                    rawPayloadHex = "58 00 36 48 0${snap.octovalvePosition} 2A 24 11",
-                    freezeFrameJson = CockpitJsonSerializer.encodeFreezeFrame(freezeFrame),
-                    timestampMs = System.currentTimeMillis(),
-                    isActive = true,
-                    isAcknowledged = false
-                )
-            }
-
-            val insertedId = repository.insertAlert(newAlert)
+        _uiState.update { it.copy(isInterrogatingBus = true) }
+        transportEngine.sendCanInterrogationRequest { _, msg ->
             _uiState.update {
                 it.copy(
                     isInterrogatingBus = false,
-                    selectedAlertId = insertedId,
-                    snackbarMessage = "CAN Interrogation complete: Captured ${newAlert.alertCode} freeze-frame"
+                    snackbarMessage = msg
                 )
             }
         }
@@ -584,10 +484,8 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
     fun clearAndAcknowledgeFaults() {
         viewModelScope.launch {
             repository.clearAndAcknowledgeActiveAlerts()
-            _uiState.update {
-                it.copy(
-                    snackbarMessage = "Transmitted S3XY_OBD Clear DTC command (0x14 FF FF FF) & acknowledged active alerts"
-                )
+            transportEngine.sendClearFaultsRequest { _, msg ->
+                _uiState.update { it.copy(snackbarMessage = msg) }
             }
         }
     }
@@ -605,7 +503,7 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
             _uiState.update {
                 it.copy(
                     selectedAlertId = null,
-                    snackbarMessage = "Cleared all historical/resolved diagnostic alerts"
+                    snackbarMessage = "Cleared historical diagnostic alerts"
                 )
             }
         }
@@ -616,6 +514,14 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
         if (_uiState.value.isRecordingSession) {
             stopSessionRecording()
         } else {
+            if (_uiState.value.connectionStatus != ConnectionStatus.CONNECTED_LIVE) {
+                _uiState.update {
+                    it.copy(
+                        snackbarMessage = "Connect to S3XY_OBD Wi-Fi (192.168.4.1) first before recording live vehicle telemetry."
+                    )
+                }
+                return
+            }
             startSessionRecording()
         }
     }
@@ -634,16 +540,12 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
         recMaxStatorC = snap.statorTempC
 
         val stamp = SimpleDateFormat("MMM dd HH:mm", Locale.US).format(Date(now))
-        val modeLabel = if (_uiState.value.connectionMode == ConnectionMode.LIVE_S3XY_WIFI) {
-            "S3XY_OBD Live (${_uiState.value.s3xyHostIp})"
-        } else {
-            "CAN Replay (${_uiState.value.activeReplayTrace.tag})"
-        }
+        val modeLabel = "S3XY_OBD (${_uiState.value.s3xyHostIp}:${_uiState.value.s3xyPort})"
 
         recordingJob = viewModelScope.launch(Dispatchers.IO) {
             val sessionId = repository.createSession(
                 TelemetrySessionEntity(
-                    title = "Model 3 Telemetry Log ($stamp)",
+                    title = "Model 3 Live Log ($stamp)",
                     sourceMode = modeLabel,
                     startTimeMs = now,
                     endTimeMs = now,
@@ -664,7 +566,7 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
                     activeRecordingSessionId = sessionId,
                     recordingElapsedSec = 0,
                     recordingSampleCount = 0,
-                    snackbarMessage = "Recording high-rate CAN telemetry to Room database..."
+                    snackbarMessage = "Recording live S3XY_OBD telemetry to device storage..."
                 )
             }
 
@@ -704,7 +606,7 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
                 repository.updateSession(
                     TelemetrySessionEntity(
                         id = sessionId,
-                        title = "Model 3 Telemetry Log ($stamp)",
+                        title = "Model 3 Live Log ($stamp)",
                         sourceMode = modeLabel,
                         startTimeMs = recordingStartMs,
                         endTimeMs = System.currentTimeMillis(),
@@ -741,7 +643,7 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
                 isRecordingSession = false,
                 activeRecordingSessionId = null,
                 selectedLogSessionId = finishedId,
-                snackbarMessage = "Saved telemetry log ($totalSamples samples) to on-device database"
+                snackbarMessage = "Saved telemetry log ($totalSamples samples)"
             )
         }
         if (finishedId != null) {

@@ -146,7 +146,7 @@ enum class MetricPid(
         title = "0-100 km/h Sprint Timer",
         shortLabel = "0-100 KM/H",
         unit = "sec",
-        minVal = 2.5f,
+        minVal = 0.0f,
         maxVal = 10.0f,
         defaultWarningThreshold = 4.5f,
         defaultStyle = WidgetStyle.DIGITAL_READOUT,
@@ -208,7 +208,7 @@ enum class MetricPid(
         title = "HV Pack Bus Voltage",
         shortLabel = "HV VOLTS",
         unit = "V",
-        minVal = 280f,
+        minVal = 0f,
         maxVal = 410f,
         defaultWarningThreshold = 398f,
         defaultStyle = WidgetStyle.SPARKLINE_CARD,
@@ -232,7 +232,7 @@ enum class MetricPid(
         title = "Lowest Brick Cell Voltage",
         shortLabel = "CELL MIN",
         unit = "V",
-        minVal = 3.00f,
+        minVal = 0.00f,
         maxVal = 4.25f,
         defaultWarningThreshold = 3.30f,
         defaultStyle = WidgetStyle.DIGITAL_READOUT,
@@ -244,7 +244,7 @@ enum class MetricPid(
         title = "Highest Brick Cell Voltage",
         shortLabel = "CELL MAX",
         unit = "V",
-        minVal = 3.00f,
+        minVal = 0.00f,
         maxVal = 4.25f,
         defaultWarningThreshold = 4.18f,
         defaultStyle = WidgetStyle.DIGITAL_READOUT,
@@ -256,7 +256,7 @@ enum class MetricPid(
         title = "Nominal Full Pack Capacity",
         shortLabel = "FULL CAP",
         unit = "kWh",
-        minVal = 50f,
+        minVal = 0f,
         maxVal = 82f,
         defaultWarningThreshold = 68f,
         defaultStyle = WidgetStyle.DIGITAL_READOUT,
@@ -342,7 +342,7 @@ enum class MetricPid(
         title = "Octovalve Thermal Mode Step",
         shortLabel = "OCTOVALVE",
         unit = "pos",
-        minVal = 1f,
+        minVal = 0f,
         maxVal = 8f,
         defaultWarningThreshold = 7f,
         defaultStyle = WidgetStyle.HORIZONTAL_BAR,
@@ -477,8 +477,12 @@ data class CanFramePacket(
     }
 }
 
+/**
+ * Clean zero-initialized telemetry state. Populated strictly from live S3XY_OBD CAN frames
+ * (or user-recorded session logs).
+ */
 data class VehicleTelemetrySnapshot(
-    val timestampMs: Long = System.currentTimeMillis(),
+    val timestampMs: Long = 0L,
     // Powertrain & Performance
     val speedKph: Float = 0f,
     val netPowerKw: Float = 0f,
@@ -490,49 +494,46 @@ data class VehicleTelemetrySnapshot(
     val frontRpm: Int = 0,
     val throttlePct: Float = 0f,
     val brakePct: Float = 0f,
-    val rearInverterTempC: Float = 34.0f,
-    val frontInverterTempC: Float = 31.5f,
-    val statorTempC: Float = 42.0f,
-    val zeroToSixtySec: Float = 3.28f,
-    val currentGear: String = "D",
+    val rearInverterTempC: Float = 0f,
+    val frontInverterTempC: Float = 0f,
+    val statorTempC: Float = 0f,
+    val zeroToSixtySec: Float = 0f,
+    val currentGear: String = "--",
     // Battery & Charging
-    val usableSocPct: Float = 78.4f,
-    val bmsSocPct: Float = 80.1f,
-    val packVoltageV: Float = 384.2f,
-    val packCurrentA: Float = 12.4f,
-    val cellMinV: Float = 3.988f,
-    val cellMaxV: Float = 3.996f,
-    val cellDeltaMv: Float = 8.0f,
-    val cellBrickVoltages: List<Float> = listOf(
-        3.991f, 3.994f, 3.989f, 3.996f, 3.992f, 3.988f,
-        3.993f, 3.995f, 3.990f, 3.992f, 3.994f, 3.991f
-    ),
-    val packTempMinC: Float = 28.5f,
-    val packTempMaxC: Float = 31.2f,
-    val nominalFullPackKwh: Float = 76.8f,
-    val initialPackKwh: Float = 79.5f,
-    val degradationPct: Float = 3.40f,
-    val chargePowerKw: Float = 0.0f,
-    val targetChargeLimitPct: Int = 80,
+    val usableSocPct: Float = 0f,
+    val bmsSocPct: Float = 0f,
+    val packVoltageV: Float = 0f,
+    val packCurrentA: Float = 0f,
+    val cellMinV: Float = 0f,
+    val cellMaxV: Float = 0f,
+    val cellDeltaMv: Float = 0f,
+    val cellBrickVoltages: List<Float> = List(12) { 0f },
+    val packTempMinC: Float = 0f,
+    val packTempMaxC: Float = 0f,
+    val nominalFullPackKwh: Float = 0f,
+    val initialPackKwh: Float = 0f,
+    val degradationPct: Float = 0f,
+    val chargePowerKw: Float = 0f,
+    val targetChargeLimitPct: Int = 0,
     // Thermal & Octovalve
-    val octovalvePosition: Int = 2,
-    val octovalveModeLabel: String = "Parallel Cabin + Pack Loop",
-    val coolantBatteryInletC: Float = 27.4f,
-    val coolantPowertrainInletC: Float = 36.8f,
-    val batteryCoolantLpm: Float = 8.5f,
-    val powertrainCoolantLpm: Float = 11.2f,
-    val cabinTempC: Float = 21.0f,
-    val ambientTempC: Float = 18.5f,
-    val hvacPowerKw: Float = 0.85f,
+    val octovalvePosition: Int = 0,
+    val octovalveModeLabel: String = "Awaiting S3XY_OBD CAN stream...",
+    val coolantBatteryInletC: Float = 0f,
+    val coolantPowertrainInletC: Float = 0f,
+    val batteryCoolantLpm: Float = 0f,
+    val powertrainCoolantLpm: Float = 0f,
+    val cabinTempC: Float = 0f,
+    val ambientTempC: Float = 0f,
+    val hvacPowerKw: Float = 0f,
     val chillerActive: Boolean = false,
     // Braking, Regen & G-Force Dynamics
-    val lateralG: Float = 0.02f,
-    val longitudinalG: Float = 0.05f,
+    val lateralG: Float = 0f,
+    val longitudinalG: Float = 0f,
     val gForceTrail: List<Pair<Float, Float>> = emptyList(),
-    val brakePressureBar: Float = 0.0f,
-    val regenPowerKw: Float = 0.0f,
-    val regenSplitPct: Float = 100f,
-    val steeringAngleDeg: Float = 0.0f,
+    val brakePressureBar: Float = 0f,
+    val regenPowerKw: Float = 0f,
+    val regenSplitPct: Float = 0f,
+    val steeringAngleDeg: Float = 0f,
     val flWheelKph: Float = 0f,
     val frWheelKph: Float = 0f,
     val rlWheelKph: Float = 0f,
@@ -581,10 +582,11 @@ data class VehicleTelemetrySnapshot(
     }
 
     fun isWarningActive(pid: MetricPid, threshold: Float): Boolean {
+        if (timestampMs == 0L) return false // Do not trigger warnings when offline/unconnected
         val value = getValue(pid)
         return when (pid) {
             MetricPid.USABLE_SOC_PCT, MetricPid.BMS_SOC_PCT, MetricPid.CELL_MIN_V, MetricPid.NOMINAL_FULL_PACK_KWH ->
-                value <= threshold
+                value > 0f && value <= threshold
             MetricPid.STEERING_ANGLE_DEG ->
                 abs(value) >= threshold
             else ->
@@ -609,57 +611,14 @@ data class AlertFreezeFrame(
     val gear: String
 )
 
-enum class ConnectionMode(val label: String) {
-    LIVE_S3XY_WIFI("Live S3XY_OBD Wi-Fi"),
-    CAN_LOG_REPLAY("Recorded CAN Replay")
-}
-
 enum class S3xyProtocol(val label: String, val defaultPort: Int) {
     PANDA_UDP_1338("Panda / CANserver UDP", 1338),
     ELM327_TCP_35000("ELM327 / STN TCP Bridge", 35000)
 }
 
 enum class ConnectionStatus(val badgeText: String) {
-    DISCONNECTED("OFFLINE"),
+    DISCONNECTED("S3XY_OBD OFFLINE"),
     CONNECTING("LINKING S3XY_OBD..."),
     CONNECTED_LIVE("S3XY_OBD LIVE"),
-    REPLAYING_LOG("CAN REPLAY ACTIVE"),
     SOCKET_ERROR("S3XY_OBD UNREACHABLE")
-}
-
-enum class BundledCanTrace(
-    val id: String,
-    val title: String,
-    val subtitle: String,
-    val durationSec: Int,
-    val tag: String
-) {
-    CANYON_SPIRITED_RUN(
-        id = "canyon_run",
-        title = "Canyon Spirited Drive (Dual Motor AWD)",
-        subtitle = "345 kW launches, -78 kW trail regen, 0.98G cornering & stator heat sweep",
-        durationSec = 120,
-        tag = "PERFORMANCE"
-    ),
-    V3_SUPERCHARGE_250KW(
-        id = "v3_supercharge",
-        title = "250 kW V3 Supercharger Session",
-        subtitle = "Octovalve 48°C pack preconditioning, 615A peak DC taper & cell balancing",
-        durationSec = 120,
-        tag = "CHARGING"
-    ),
-    SUB_ZERO_OCTOVALVE(
-        id = "cold_soak",
-        title = "-8°C Cold Soak & Octovalve Heat Pump",
-        subtitle = "Series heat-pump compressor loop, stator heat scavenging & cabin warmup",
-        durationSec = 120,
-        tag = "THERMAL"
-    ),
-    TRACK_FAULT_DIAGNOSTIC(
-        id = "track_faults",
-        title = "Track Redline & Fault Interrogation Trace",
-        subtitle = "High thermal load triggering DI_a138, BMS_a063 & VCFRONT_a192 alerts",
-        durationSec = 120,
-        tag = "DIAGNOSTICS"
-    )
 }

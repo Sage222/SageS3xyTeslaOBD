@@ -20,16 +20,14 @@ gradle assembleDebug
 
 ## Key Features
 
-### 1. Dual-Mode `S3XY_OBD` Connectivity & Recorded CAN Replay
-- **Live `S3XY_OBD` Wi-Fi Socket**:
-  - **Default SSID**: `S3XY_OBD` (WPA2 Password: `12345678`)
-  - **Commander Host IP**: `192.168.4.1`
-  - **Protocols Supported**:
-    - **Panda / CANserver Binary UDP (`:1338`)** — 500 kbps multi-bus 11-bit Tesla CAN frame streaming with `0x0F` keepalive heartbeat.
-    - **ELM327 / STN TCP Bridge (`:35000`)** — ASCII hex frame streaming (`ATSP6` / `ATMA`).
-  - **Cellular Data Preservation**: Uses Android `ConnectivityManager` + `WifiNetworkSpecifier` network binding so your phone or tablet stays connected to mobile internet while streaming local CAN sockets over `192.168.4.1`.
-- **Recorded CAN Log Replay Engine**:
-  - When away from the vehicle, test and customize dashboards using 4 built-in 2023 Model 3 CAN traces (*Canyon Spirited Drive*, *250 kW V3 Supercharger Session*, *-8°C Cold Soak & Octovalve Heat Pump*, and *Track Redline & Fault Interrogation*) or replay your own recorded sessions with play/pause, timeline scrubbing, and `0.5x`–`4x` playback speeds.
+### 1. Live `S3XY_OBD` Wi-Fi Socket Connectivity
+- **Default SSID**: `S3XY_OBD` (WPA2 Password: `12345678`)
+- **Commander Host IP**: `192.168.4.1`
+- **Protocols Supported**:
+  - **Panda / CANserver Binary UDP (`:1338`)** — 500 kbps multi-bus 11-bit Tesla CAN frame streaming with `0x0F` keepalive heartbeat.
+  - **ELM327 / STN TCP Bridge (`:35000`)** — ASCII hex frame streaming (`ATSP6` / `ATMA`).
+- **Cellular Data Preservation**: Uses Android `ConnectivityManager` + `WifiNetworkSpecifier` network binding so your phone or tablet stays connected to mobile internet while streaming local CAN sockets over `192.168.4.1`.
+- **Zero Demo / Mock Data**: Exclusively displays legitimate live telemetry, CAN frames, and alerts received from your vehicle's S3XY Commander.
 
 ### 2. Four Pre-Configured 2023 Model 3 Dashboards + Custom Layout Builder
 - **Performance & Inverters**: Vehicle speed, bi-directional net pack power (`kW`), rear & front drive unit power/torque/RPM, SiC MOSFET inverter & rear stator temperatures, 0–100 km/h sprint timer, and throttle pedal map.

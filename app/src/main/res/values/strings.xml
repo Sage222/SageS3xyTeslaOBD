@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">S3XY Cockpit</string>
+    <string name="nav_cockpit">Cockpit</string>
+    <string name="nav_chassis">X-Ray Flow</string>
+    <string name="nav_alerts">Alerts / DTC</string>
+    <string name="nav_logs">Logs &amp; Replay</string>
+    <string name="s3xy_ssid_default">S3XY_OBD</string>
+    <string name="s3xy_ip_default">192.168.4.1</string>
+    <string name="s3xy_connect_button">Connect S3XY_OBD</string>
+    <string name="s3xy_disconnect_button">Disconnect Socket</string>
+    <string name="replay_mode_label">CAN Log Replay</string>
+    <string name="record_start">REC Log</string>
+    <string name="record_stop">STOP Log</string>
+    <string name="customize_dashboard">Customize Layout</string>
+    <string name="interrogate_bus">Interrogate CAN Bus</string>
+    <string name="clear_faults">Clear &amp; Acknowledge</string>
+    <string name="export_csv">Export CSV</string>
+    <string name="export_json">Export JSON</string>
+    <string name="clear_all_logs">Purge All Logs</string>
+</resources>

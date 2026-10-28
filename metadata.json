@@ -1,0 +1,6 @@
+{
+  "name": "S3XY Cockpit",
+  "description": "Real-time 2023 Tesla Model 3 CAN-bus telemetry dashboard, alert interrogator, and session logger for the Enhance S3XY Commander Wi-Fi (S3XY_OBD).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

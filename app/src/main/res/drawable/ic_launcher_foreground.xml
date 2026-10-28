@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <group
+        android:scaleX="0.55"
+        android:scaleY="0.55"
+        android:translateX="5.4"
+        android:translateY="5.4">
+        <!-- Outer Speedometer Telemetry Arc -->
+        <path
+            android:fillColor="#00E5FF"
+            android:pathData="M12,3C7.03,3 3,7.03 3,12C3,14.87 4.35,17.43 6.45,19.08L8.03,17.15C6.49,15.95 5.5,14.09 5.5,12C5.5,8.41 8.41,5.5 12,5.5C15.59,5.5 18.5,8.41 18.5,12C18.5,14.09 17.51,15.95 15.97,17.15L17.55,19.08C19.65,17.43 21,14.87 21,12C21,7.03 16.97,3 12,3Z" />
+        <!-- Central High-Voltage Lightning & Needle Silhouette -->
+        <path
+            android:fillColor="#00E676"
+            android:pathData="M13.5,7L8.5,13.5H12L10.5,19L16,12H12.5L13.5,7Z" />
+    </group>
+</vector>

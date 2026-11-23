@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.WifiOff
@@ -35,6 +36,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -133,13 +135,15 @@ fun CockpitTopStatusBar(
                             )
                             Column {
                                 Text(
-                                    text = uiState.connectionStatus.badgeText,
+                                    text = "${uiState.s3xySsid} • ${uiState.connectionStatus.badgeText}",
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold,
-                                    color = badgeColor
+                                    color = badgeColor,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "${uiState.busFrameRateFps} msg/s • ${uiState.s3xyHostIp}:${uiState.s3xyPort}",
+                                    text = "${uiState.busFrameRateFps} msg/s • ${uiState.s3xyHostIp}:${uiState.s3xyPort} (${uiState.socketDiagnostics.datagramsReceived} pkts)",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
@@ -238,7 +242,7 @@ fun CockpitTopStatusBar(
                             )
                         }
                         Text(
-                            text = "CONFIGURE",
+                            text = "DIAGNOSE / BIND",
                             fontFamily = JetBrainsMonoFamily,
                             fontWeight = FontWeight.Bold,
                             fontSize = 11.sp,
@@ -256,7 +260,9 @@ fun CockpitTopStatusBar(
 fun S3xyConnectionModalSheet(
     uiState: CockpitUiState,
     onDismiss: () -> Unit,
-    onUpdateNetworkConfig: (String, String, String, Int, S3xyProtocol) -> Unit,
+    onUpdateNetworkConfig: (String, String, String, Int, S3xyProtocol, Boolean) -> Unit,
+    onTogglePandaFilterWhitelist: (Boolean) -> Unit,
+    onResendPandaHandshake: () -> Unit,
     onConnectLiveWifi: (Boolean) -> Unit,
     onDisconnect: () -> Unit
 ) {
@@ -266,6 +272,8 @@ fun S3xyConnectionModalSheet(
     var hostIp by remember(uiState.s3xyHostIp) { mutableStateOf(uiState.s3xyHostIp) }
     var portText by remember(uiState.s3xyPort) { mutableStateOf(uiState.s3xyPort.toString()) }
     var protocol by remember(uiState.s3xyProtocol) { mutableStateOf(uiState.s3xyProtocol) }
+    var useFilterList by remember(uiState.usePandaFilterWhitelist) { mutableStateOf(uiState.usePandaFilterWhitelist) }
+    val diag = uiState.socketDiagnostics
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -280,19 +288,108 @@ fun S3xyConnectionModalSheet(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Text(
-                text = "S3XY_OBD Wi-Fi Socket Configuration",
+                text = "S3XY Commander Wi-Fi & Panda UDP Configuration",
                 style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = "Connect directly to your 2023 Tesla Model 3 Enhance S3XY Commander Wi-Fi access point (S3XY_OBD) for live CAN-bus telemetry and fault interrogation.",
+                text = "Supports custom SSIDs and automatically binds UDP/TCP sockets to your active Wi-Fi interface so Android does not route 192.168.4.1 traffic over mobile data.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
+            // 1. Live Wi-Fi & UDP Transport Diagnostics Panel
             Surface(
                 shape = MaterialTheme.shapes.medium,
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+                border = BorderStroke(
+                    1.dp,
+                    if (diag.datagramsReceived > 0L) RegenEmerald else MaterialTheme.colorScheme.outline
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "LIVE SOCKET & WI-FI INTERFACE TELEMETRY",
+                            fontFamily = JetBrainsMonoFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = ElectricCyan
+                        )
+                        Text(
+                            text = if (diag.isWifiInterfaceBound) "WI-FI BOUND" else "NO WI-FI INTERFACE",
+                            fontFamily = JetBrainsMonoFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = if (diag.isWifiInterfaceBound) RegenEmerald else TrackCrimson
+                        )
+                    }
+
+                    Text(
+                        text = "Phone Wi-Fi IP: ${diag.localWifiIp}  •  Detected Gateway: ${diag.detectedGatewayIp}",
+                        fontFamily = JetBrainsMonoFamily,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Panda 'ehllo' Sent: ${diag.handshakesSent}  •  RX Packets: ${diag.datagramsReceived} (${diag.bytesReceived} bytes)",
+                        fontFamily = JetBrainsMonoFamily,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Last RX Hex: ${diag.lastRawPacketHex}",
+                        fontFamily = JetBrainsMonoFamily,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    if (diag.detectedGatewayIp != hostIp && diag.detectedGatewayIp != "--") {
+                        OutlinedButton(
+                            onClick = {
+                                hostIp = diag.detectedGatewayIp
+                                val parsedPort = portText.toIntOrNull() ?: protocol.defaultPort
+                                onUpdateNetworkConfig(ssid, passphrase, hostIp, parsedPort, protocol, useFilterList)
+                                onConnectLiveWifi(false)
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Use Detected Wi-Fi Gateway IP (${diag.detectedGatewayIp})")
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = onResendPandaHandshake,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("resend_handshake_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.size(6.dp))
+                        Text("Re-Send Panda 'ehllo' + 0x0F CAN Filter Subscription Now")
+                    }
+                }
+            }
+
+            // 2. Custom SSID, IP, Port & Protocol Settings
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(
@@ -311,7 +408,7 @@ fun S3xyConnectionModalSheet(
                             tint = ElectricCyan
                         )
                         Text(
-                            text = "Enhance S3XY Commander Link",
+                            text = "Enhance S3XY Commander Network Settings",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
@@ -324,7 +421,7 @@ fun S3xyConnectionModalSheet(
                         OutlinedTextField(
                             value = ssid,
                             onValueChange = { ssid = it },
-                            label = { Text("Wi-Fi SSID") },
+                            label = { Text("Custom Wi-Fi SSID") },
                             singleLine = true,
                             modifier = Modifier.weight(1f)
                         )
@@ -351,7 +448,7 @@ fun S3xyConnectionModalSheet(
                         OutlinedTextField(
                             value = portText,
                             onValueChange = { portText = it },
-                            label = { Text("Socket Port") },
+                            label = { Text("UDP/TCP Port") },
                             singleLine = true,
                             modifier = Modifier.weight(0.8f)
                         )
@@ -373,6 +470,35 @@ fun S3xyConnectionModalSheet(
                         }
                     }
 
+                    if (protocol == S3xyProtocol.PANDA_UDP_1338) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Send 0x0F CAN ID Filter Subscription",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Subscribes to 26 Model 3 CAN IDs ([0x0F, 0xFF, id_hi, id_lo]) after 'ehllo'. Toggle off if your firmware streams all frames unfiltered.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = useFilterList,
+                                onCheckedChange = { checked ->
+                                    useFilterList = checked
+                                    onTogglePandaFilterWhitelist(checked)
+                                }
+                            )
+                        }
+                    }
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -380,7 +506,7 @@ fun S3xyConnectionModalSheet(
                         Button(
                             onClick = {
                                 val parsedPort = portText.toIntOrNull() ?: protocol.defaultPort
-                                onUpdateNetworkConfig(ssid, passphrase, hostIp, parsedPort, protocol)
+                                onUpdateNetworkConfig(ssid, passphrase, hostIp, parsedPort, protocol, useFilterList)
                                 onConnectLiveWifi(false)
                             },
                             modifier = Modifier
@@ -388,18 +514,18 @@ fun S3xyConnectionModalSheet(
                                 .testTag("connect_socket_button"),
                             colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan)
                         ) {
-                            Text("Open CAN Socket", fontWeight = FontWeight.Bold)
+                            Text("Save & Open Socket", fontWeight = FontWeight.Bold)
                         }
 
                         OutlinedButton(
                             onClick = {
                                 val parsedPort = portText.toIntOrNull() ?: protocol.defaultPort
-                                onUpdateNetworkConfig(ssid, passphrase, hostIp, parsedPort, protocol)
+                                onUpdateNetworkConfig(ssid, passphrase, hostIp, parsedPort, protocol, useFilterList)
                                 onConnectLiveWifi(true)
                             },
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("Bind S3XY_OBD Wi-Fi")
+                            Text("Bind Custom SSID")
                         }
                     }
 
@@ -410,7 +536,7 @@ fun S3xyConnectionModalSheet(
                             onClick = onDisconnect,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Disconnect S3XY_OBD Socket", color = TrackCrimson)
+                            Text("Send 'bye' & Disconnect Socket", color = TrackCrimson)
                         }
                     }
                 }

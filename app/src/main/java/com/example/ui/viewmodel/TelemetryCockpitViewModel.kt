@@ -1,10 +1,12 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.can.Model3CanFrameDecoder
 import com.example.data.can.S3xyTransportEngine
+import com.example.data.can.SocketTransportDiagnostics
 import com.example.data.export.TelemetryExportManager
 import com.example.data.local.AppDatabase
 import com.example.data.local.CockpitJsonSerializer
@@ -50,12 +52,14 @@ data class CockpitUiState(
     val isDarkTheme: Boolean = true,
     // S3XY_OBD Live Wi-Fi Connection State
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
-    val statusMessage: String = "Offline — Tap to connect to S3XY_OBD Wi-Fi (192.168.4.1)",
+    val statusMessage: String = "Offline — Tap to connect to S3XY Commander Wi-Fi (192.168.4.1)",
     val s3xySsid: String = "S3XY_OBD",
     val s3xyPassphrase: String = "12345678",
     val s3xyHostIp: String = "192.168.4.1",
     val s3xyPort: Int = 1338,
     val s3xyProtocol: S3xyProtocol = S3xyProtocol.PANDA_UDP_1338,
+    val usePandaFilterWhitelist: Boolean = true,
+    val socketDiagnostics: SocketTransportDiagnostics = SocketTransportDiagnostics(),
     val busFrameRateFps: Int = 0,
     val showConnectionSheet: Boolean = false,
     // Live Telemetry & History Sparklines
@@ -85,6 +89,7 @@ data class CockpitUiState(
 
 class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(application) {
 
+    private val prefs = application.getSharedPreferences("s3xy_network_prefs", Context.MODE_PRIVATE)
     private val database = AppDatabase.getInstance(application)
     private val repository = TelemetryRepository(
         dashboardDao = database.dashboardDao(),
@@ -92,7 +97,7 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
         sessionDao = database.telemetrySessionDao()
     )
 
-    private val _uiState = MutableStateFlow(CockpitUiState())
+    private val _uiState = MutableStateFlow(loadInitialUiState())
     val uiState: StateFlow<CockpitUiState> = _uiState.asStateFlow()
 
     val dashboards: StateFlow<List<DashboardPresetEntity>> = repository.dashboardsFlow
@@ -114,6 +119,27 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
     private var recMaxDeltaMv: Float = 0f
     private var recMaxStatorC: Float = 0f
 
+    private fun loadInitialUiState(): CockpitUiState {
+        val savedSsid = prefs.getString("ssid", "S3XY_OBD") ?: "S3XY_OBD"
+        val savedPass = prefs.getString("passphrase", "12345678") ?: "12345678"
+        val savedHostIp = prefs.getString("host_ip", "192.168.4.1") ?: "192.168.4.1"
+        val savedPort = prefs.getInt("port", 1338)
+        val savedProtoName = prefs.getString("protocol", S3xyProtocol.PANDA_UDP_1338.name)
+        val savedProto = runCatching {
+            S3xyProtocol.valueOf(savedProtoName ?: S3xyProtocol.PANDA_UDP_1338.name)
+        }.getOrDefault(S3xyProtocol.PANDA_UDP_1338)
+        val savedFilter = prefs.getBoolean("use_filter_whitelist", true)
+
+        return CockpitUiState(
+            s3xySsid = savedSsid,
+            s3xyPassphrase = savedPass,
+            s3xyHostIp = savedHostIp,
+            s3xyPort = savedPort,
+            s3xyProtocol = savedProto,
+            usePandaFilterWhitelist = savedFilter
+        )
+    }
+
     private val transportEngine = S3xyTransportEngine(
         context = application.applicationContext,
         scope = viewModelScope,
@@ -123,17 +149,21 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
         onAsciiLineReceived = { line, fps ->
             handleIncomingAsciiLine(line, fps)
         },
-        onSocketStateChanged = { connected, message ->
+        onSocketStateChanged = { connected, message, diag ->
             _uiState.update { state ->
                 val status = when {
                     connected -> ConnectionStatus.CONNECTED_LIVE
-                    message.contains("Connecting") -> ConnectionStatus.CONNECTING
+                    message.contains("Opening") ||
+                        message.contains("Sent 'ehllo'") ||
+                        message.contains("Listening") ||
+                        message.contains("Paused") -> ConnectionStatus.CONNECTING
                     else -> ConnectionStatus.SOCKET_ERROR
                 }
                 state.copy(
                     connectionStatus = status,
                     busFrameRateFps = if (connected) state.busFrameRateFps else 0,
-                    statusMessage = message
+                    statusMessage = message,
+                    socketDiagnostics = diag
                 )
             }
         }
@@ -142,9 +172,14 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
     init {
         viewModelScope.launch {
             repository.ensureSeeded()
-            // Attempt automatic live connection to 192.168.4.1:1338 if user is already on S3XY_OBD Wi-Fi
+            // Automatically bind to active Wi-Fi interface and start Panda UDP ("ehllo" + 0x0F filter list)
             val st = _uiState.value
-            transportEngine.startLiveSocket(st.s3xyHostIp, st.s3xyPort, st.s3xyProtocol)
+            transportEngine.startLiveSocket(
+                hostIp = st.s3xyHostIp,
+                port = st.s3xyPort,
+                protocol = st.s3xyProtocol,
+                useFilterSubscription = st.usePandaFilterWhitelist
+            )
         }
     }
 
@@ -223,21 +258,60 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
         _uiState.update { it.copy(snackbarMessage = null) }
     }
 
-    // S3XY_OBD Live Wi-Fi Controls
+    // S3XY_OBD Live Wi-Fi Controls (Persisted for Custom SSIDs)
     fun updateS3xyNetworkConfig(
         ssid: String,
         passphrase: String,
         hostIp: String,
         port: Int,
-        protocol: S3xyProtocol
+        protocol: S3xyProtocol,
+        useFilterWhitelist: Boolean = _uiState.value.usePandaFilterWhitelist
     ) {
+        val cleanSsid = ssid.trim().ifEmpty { "S3XY_OBD" }
+        val cleanHost = hostIp.trim().ifEmpty { "192.168.4.1" }
+        prefs.edit()
+            .putString("ssid", cleanSsid)
+            .putString("passphrase", passphrase)
+            .putString("host_ip", cleanHost)
+            .putInt("port", port)
+            .putString("protocol", protocol.name)
+            .putBoolean("use_filter_whitelist", useFilterWhitelist)
+            .apply()
+
         _uiState.update {
             it.copy(
-                s3xySsid = ssid.trim().ifEmpty { "S3XY_OBD" },
+                s3xySsid = cleanSsid,
                 s3xyPassphrase = passphrase,
-                s3xyHostIp = hostIp.trim().ifEmpty { "192.168.4.1" },
+                s3xyHostIp = cleanHost,
                 s3xyPort = port,
-                s3xyProtocol = protocol
+                s3xyProtocol = protocol,
+                usePandaFilterWhitelist = useFilterWhitelist
+            )
+        }
+    }
+
+    fun togglePandaFilterWhitelist(enabled: Boolean) {
+        prefs.edit().putBoolean("use_filter_whitelist", enabled).apply()
+        _uiState.update {
+            it.copy(
+                usePandaFilterWhitelist = enabled,
+                snackbarMessage = if (enabled) {
+                    "Enabled Panda 0x0F CAN ID filter subscription packet"
+                } else {
+                    "Streaming raw Panda 'ehllo' mode without 0x0F filter packet"
+                }
+            )
+        }
+        transportEngine.sendPandaHandshakeAndFiltersNow(enabled)
+    }
+
+    fun resendPandaHandshakeNow() {
+        val useFilters = _uiState.value.usePandaFilterWhitelist
+        transportEngine.sendPandaHandshakeAndFiltersNow(useFilters)
+        _uiState.update {
+            it.copy(
+                snackbarMessage = "Sent Panda 'ehllo' handshake" +
+                    if (useFilters) " + 0x0F CAN filter subscription" else ""
             )
         }
     }
@@ -247,7 +321,7 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
         _uiState.update {
             it.copy(
                 connectionStatus = ConnectionStatus.CONNECTING,
-                statusMessage = "Binding to ${state.s3xySsid} (${state.s3xyHostIp}:${state.s3xyPort})..."
+                statusMessage = "Binding to '${state.s3xySsid}' (${state.s3xyHostIp}:${state.s3xyPort})..."
             )
         }
 
@@ -255,24 +329,35 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
             transportEngine.requestS3xyWifiBinding(state.s3xySsid, state.s3xyPassphrase) { ok, msg ->
                 _uiState.update { it.copy(statusMessage = msg, snackbarMessage = msg) }
                 if (ok) {
-                    transportEngine.startLiveSocket(state.s3xyHostIp, state.s3xyPort, state.s3xyProtocol)
+                    val freshState = _uiState.value
+                    transportEngine.startLiveSocket(
+                        hostIp = freshState.s3xyHostIp,
+                        port = freshState.s3xyPort,
+                        protocol = freshState.s3xyProtocol,
+                        useFilterSubscription = freshState.usePandaFilterWhitelist
+                    )
                 } else {
                     _uiState.update { it.copy(connectionStatus = ConnectionStatus.SOCKET_ERROR) }
                 }
             }
         } else {
-            transportEngine.startLiveSocket(state.s3xyHostIp, state.s3xyPort, state.s3xyProtocol)
+            transportEngine.startLiveSocket(
+                hostIp = state.s3xyHostIp,
+                port = state.s3xyPort,
+                protocol = state.s3xyProtocol,
+                useFilterSubscription = state.usePandaFilterWhitelist
+            )
         }
     }
 
     fun disconnectS3xySocket() {
-        transportEngine.stopAll()
+        transportEngine.stopAll(sendBye = true)
         _uiState.update {
             it.copy(
                 connectionStatus = ConnectionStatus.DISCONNECTED,
                 busFrameRateFps = 0,
-                statusMessage = "Disconnected from S3XY_OBD socket",
-                snackbarMessage = "Disconnected from S3XY_OBD socket"
+                statusMessage = "Disconnected from S3XY Commander socket",
+                snackbarMessage = "Sent 'bye' and closed S3XY Commander socket"
             )
         }
     }
@@ -455,7 +540,7 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
         }
     }
 
-    // Diagnostic Alert Interrogation & Clear Commands (Strictly Real S3XY_OBD Socket)
+    // Diagnostic Alert Interrogation & Clear Commands
     fun selectSubsystemFilter(subsystem: TeslaSubsystem) {
         _uiState.update { it.copy(selectedSubsystemFilter = subsystem) }
     }
@@ -514,13 +599,11 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
         if (_uiState.value.isRecordingSession) {
             stopSessionRecording()
         } else {
-            if (_uiState.value.connectionStatus != ConnectionStatus.CONNECTED_LIVE) {
-                _uiState.update {
-                    it.copy(
-                        snackbarMessage = "Connect to S3XY_OBD Wi-Fi (192.168.4.1) first before recording live vehicle telemetry."
-                    )
-                }
-                return
+            // Ensure socket is running when user starts recording
+            if (_uiState.value.connectionStatus == ConnectionStatus.DISCONNECTED ||
+                _uiState.value.connectionStatus == ConnectionStatus.SOCKET_ERROR
+            ) {
+                connectToLiveS3xyWifi(bindOsWifiFirst = false)
             }
             startSessionRecording()
         }
@@ -534,13 +617,13 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
         recMaxSpeed = snap.speedKph
         recPeakKw = snap.netPowerKw
         recMaxRegenKw = min(0f, snap.netPowerKw)
-        recMinSoc = snap.usableSocPct
+        recMinSoc = if (snap.usableSocPct > 0f) snap.usableSocPct else 100f
         recMaxSoc = snap.usableSocPct
         recMaxDeltaMv = snap.cellDeltaMv
         recMaxStatorC = snap.statorTempC
 
         val stamp = SimpleDateFormat("MMM dd HH:mm", Locale.US).format(Date(now))
-        val modeLabel = "S3XY_OBD (${_uiState.value.s3xyHostIp}:${_uiState.value.s3xyPort})"
+        val modeLabel = "${_uiState.value.s3xySsid} (${_uiState.value.s3xyHostIp}:${_uiState.value.s3xyPort})"
 
         recordingJob = viewModelScope.launch(Dispatchers.IO) {
             val sessionId = repository.createSession(
@@ -553,7 +636,7 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
                     maxSpeedKph = recMaxSpeed,
                     peakPowerKw = recPeakKw,
                     maxRegenKw = recMaxRegenKw,
-                    minSocPct = recMinSoc,
+                    minSocPct = if (recMinSoc > 100f) 0f else recMinSoc,
                     maxSocPct = recMaxSoc,
                     maxCellDeltaMv = recMaxDeltaMv,
                     maxStatorTempC = recMaxStatorC
@@ -566,7 +649,7 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
                     activeRecordingSessionId = sessionId,
                     recordingElapsedSec = 0,
                     recordingSampleCount = 0,
-                    snackbarMessage = "Recording live S3XY_OBD telemetry to device storage..."
+                    snackbarMessage = "Recording telemetry log from ${_uiState.value.s3xySsid}..."
                 )
             }
 
@@ -578,7 +661,9 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
                 recMaxSpeed = max(recMaxSpeed, cur.speedKph)
                 recPeakKw = max(recPeakKw, cur.netPowerKw)
                 recMaxRegenKw = min(recMaxRegenKw, cur.netPowerKw)
-                recMinSoc = min(recMinSoc, cur.usableSocPct)
+                if (cur.usableSocPct > 0f) {
+                    recMinSoc = min(recMinSoc, cur.usableSocPct)
+                }
                 recMaxSoc = max(recMaxSoc, cur.usableSocPct)
                 recMaxDeltaMv = max(recMaxDeltaMv, cur.cellDeltaMv)
                 recMaxStatorC = max(recMaxStatorC, cur.statorTempC)
@@ -614,7 +699,7 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
                         maxSpeedKph = recMaxSpeed,
                         peakPowerKw = recPeakKw,
                         maxRegenKw = recMaxRegenKw,
-                        minSocPct = recMinSoc,
+                        minSocPct = if (recMinSoc >= 100f && recMaxSoc == 0f) 0f else recMinSoc,
                         maxSocPct = recMaxSoc,
                         maxCellDeltaMv = recMaxDeltaMv,
                         maxStatorTempC = recMaxStatorC
@@ -722,7 +807,7 @@ class TelemetryCockpitViewModel(application: Application) : AndroidViewModel(app
 
     override fun onCleared() {
         super.onCleared()
-        transportEngine.stopAll()
+        transportEngine.stopAll(sendBye = true)
         recordingJob?.cancel()
     }
 }

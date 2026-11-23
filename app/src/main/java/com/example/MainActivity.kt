@@ -303,6 +303,8 @@ fun S3xyCockpitAppShell(
                     uiState = uiState,
                     onDismiss = { viewModel.setShowConnectionSheet(false) },
                     onUpdateNetworkConfig = viewModel::updateS3xyNetworkConfig,
+                    onTogglePandaFilterWhitelist = viewModel::togglePandaFilterWhitelist,
+                    onResendPandaHandshake = viewModel::resendPandaHandshakeNow,
                     onConnectLiveWifi = { bindFirst ->
                         viewModel.setShowConnectionSheet(false)
                         viewModel.connectToLiveS3xyWifi(bindFirst)
